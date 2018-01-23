@@ -50,6 +50,7 @@ class Feature {
     *
     */
   constructor({variation, studyUtils, reasonName}) {
+    console.log("initilizing Feature:", variation);
     // unused.  Some other UI might use the specific variation info for things.
     this.variation = variation;
     this.studyUtils = studyUtils;

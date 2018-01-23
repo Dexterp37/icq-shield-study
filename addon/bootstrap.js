@@ -27,19 +27,17 @@ log.level = Services.prefs.getIntPref(PREF_LOGGING_LEVEL, Log.Level.Warn);
 
 
 // QA NOTE: Study Specific Modules - package.json:addon.chromeResource
-const BASE = `button-icon-preference`;
+const BASE = `icq-study-v1`;
 XPCOMUtils.defineLazyModuleGetter(this, "Feature", `resource://${BASE}/lib/Feature.jsm`);
 
 
-/* Example addon-specific module imports.  Remember to Unload during shutdown!
+/* Example addon-specific module imports.  Remember to Unload during shutdown() below.
 
   // https://developer.mozilla.org/en-US/docs/Mozilla/JavaScript_code_modules/Using
-
 
    Ideally, put ALL your feature code in a Feature.jsm file,
    NOT in this bootstrap.js.
 
-  const BASE=`template-shield-study`;
   XPCOMUtils.defineLazyModuleGetter(this, "SomeExportedSymbol",
     `resource://${BASE}/SomeModule.jsm");
 
@@ -64,12 +62,11 @@ async function startup(addonData, reason) {
   studyUtils.setVariation(variation);
   log.debug(`studyUtils has config and variation.name: ${variation.name}.  Ready to send telemetry`);
 
-
-  /** addon_install ONLY:
-    * - note first seen,
-    * - check eligible
-    */
-  if ((REASONS[reason]) === "ADDON_INSTALL") {
+  /** addon_install and addon_upgrade ONLY:
+   * - note first seen,
+   * - check eligible
+   */
+  if (reason === REASONS.ADDON_INSTALL || reason === REASONS.ADDON_UPGRADE) {
     //  telemetry "enter" ONCE
     studyUtils.firstSeen();
     const eligible = await config.isEligible(); // addon-specific
@@ -77,44 +74,52 @@ async function startup(addonData, reason) {
       // 1. uses config.endings.ineligible.url if any,
       // 2. sends UT for "ineligible"
       // 3. then uninstalls addon
-      await studyUtils.endStudy({reason: "ineligible"});
+      await studyUtils.endStudy({ reason: "ineligible" });
       return;
     }
+  } else {
+    return;
   }
 
   // startup for eligible users.
   // 1. sends `install` ping IFF ADDON_INSTALL.
   // 2. sets activeExperiments in telemetry environment.
-  await studyUtils.startup({reason});
+  await studyUtils.startup({ reason });
 
   // if you have code to handle expiration / long-timers, it could go here
-  (function fakeTrackExpiration() {})();
+  (function fakeTrackExpiration() {
+  })();
+
+  // initiate the chrome-privileged part of the study add-on
+  this.feature = new Feature({ variation, studyUtils, reasonName: REASONS[reason], log });
 
   // IFF your study has an embedded webExtension, start it.
   const { webExtension } = addonData;
   if (webExtension) {
     webExtension.startup().then(api => {
-      const {browser} = api;
+      const { browser } = api;
       /** spec for messages intended for Shield =>
-        * {shield:true,msg=[info|endStudy|telemetry],data=data}
-        */
+       * {shield:true,msg=[info|endStudy|telemetry],data=data}
+       */
       browser.runtime.onMessage.addListener(studyUtils.respondToWebExtensionMessage);
       // other browser.runtime.onMessage handlers for your addon, if any
+      // this.feature.afterWebExtensionStartup(browser);
+
     });
   }
 
   // log what the study variation and other info is.
   log.debug(`info ${JSON.stringify(studyUtils.info())}`);
 
-  // Start up your feature, with specific variation info.
-  this.feature = new Feature({variation, studyUtils, reasonName: REASONS[reason]});
+  // start up the chrome-privileged part of the study
+  // this.feature.privilegedStartup();
 }
 
 /** Shutdown needs to distinguish between USER-DISABLE and other
-  * times that `endStudy` is called.
-  *
-  * studyUtils._isEnding means this is a '2nd shutdown'.
-  */
+ * times that `endStudy` is called.
+ *
+ * studyUtils._isEnding means this is a '2nd shutdown'.
+ */
 function shutdown(addonData, reason) {
   log.debug("shutdown", REASONS[reason] || reason);
   // FRAGILE: handle uninstalls initiated by USER or by addon
@@ -123,14 +128,16 @@ function shutdown(addonData, reason) {
     if (!studyUtils._isEnding) {
       // we are the first 'uninstall' requestor => must be user action.
       log.debug("probably: user requested shutdown");
-      studyUtils.endStudy({reason: "user-disable"});
+      studyUtils.endStudy({ reason: "user-disable" });
       return;
     }
     // normal shutdown, or 2nd uninstall request
 
     // QA NOTE:  unload addon specific modules here.
     Cu.unload(`resource://${BASE}/lib/Feature.jsm`);
-    this.feature.shutdown();
+    if (this.feature) {
+      this.feature.shutdown();
+    }
 
     // clean up our modules.
     Cu.unload(CONFIGPATH);
@@ -161,6 +168,3 @@ function getVariationFromPref(weightedVariations) {
   }
   return name; // undefined
 }
-
-
-

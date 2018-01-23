@@ -28,7 +28,7 @@ var config = {
     // required keys: studyName, endings, telemetry
 
     // will be used activeExperiments tagging
-    "studyName": "buttonFeatureExperiment",
+    "studyName": "icqStudyV1",
 
     /** **endings**
       * - keys indicate the 'endStudy' even that opens these.
@@ -39,14 +39,8 @@ var config = {
       */
     "endings": {
       /** standard endings */
-      "user-disable": {
-        "baseUrl": "http://www.example.com/?reason=user-disable",
-      },
-      "ineligible": {
-        "baseUrl": "http://www.example.com/?reason=ineligible",
-      },
-      "expired": {
-        "baseUrl": "http://www.example.com/?reason=expired",
+      "no-endings": {
+        "url": "null",
       },
       /** User defined endings */
       "used-often": {
@@ -55,7 +49,7 @@ var config = {
       },
       "a-non-url-opening-ending": {
         "study_state": "ended-neutral",
-        "baseUrl":  null,
+        "baseUrl": null,
       },
       "introduction-leave-study": {
         "study_state": "ended-negative",
@@ -64,7 +58,7 @@ var config = {
     },
     "telemetry": {
       "send": true, // assumed false. Actually send pings?
-      "removeTestingFlag": false,  // Marks pings as testing, set true for actual release
+      "removeTestingFlag": true,  // Marks pings as testing, set true for actual release
       // TODO "onInvalid": "throw"  // invalid packet for schema?  throw||log
     },
   },
@@ -72,7 +66,7 @@ var config = {
   // required LOG key
   "log": {
     // Fatal: 70, Error: 60, Warn: 50, Info: 40, Config: 30, Debug: 20, Trace: 10, All: -1,
-    "studyUtils":  {
+    "studyUtils": {
       "level": "Trace",
     },
   },
