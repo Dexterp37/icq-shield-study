@@ -6,6 +6,8 @@
 - Cu.import in this file will work for any 'general firefox things' (Services,etc)
   but NOT for addon-specific libs
 */
+const { utils: Cu } = Components;
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 /* eslint no-unused-vars: ["error", { "varsIgnorePattern": "(config|EXPORTED_SYMBOLS)" }]*/
 var EXPORTED_SYMBOLS = ["config"];
@@ -29,6 +31,10 @@ var config = {
 
     // will be used activeExperiments tagging
     "studyName": "icqStudyV1",
+
+    // The chrome resource path. This should be somehow related to the study name,
+    // but it's not required to.
+    "chromeResourceBasePath": "icq-study-v1",
 
     /** **endings**
       * - keys indicate the 'endStudy' even that opens these.
@@ -76,9 +82,8 @@ var config = {
   // a place to put an 'isEligible' function
   // Will run only during first install attempt
   "isEligible": async function() {
-    // get whatever prefs, addons, telemetry, anything!
-    // Cu.import can see 'firefox things', but not package things.
-    return true;
+    // We only support this study on Windows.
+    return AppConstants.platform === "win";
   },
 
   /* Button study branches and sample weights

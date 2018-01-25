@@ -1,141 +1,248 @@
 "use strict";
 
-
-/**  Example Feature module for a Shield Study.
-  *
-  *  UI:
-  *  - during INSTALL only, show a notification bar with 2 buttons:
-  *    - "Thanks".  Accepts the study (optional)
-  *    - "I don't want this".  Uninstalls the study.
-  *
-  *  Firefox code:
-  *  - Implements the 'introduction' to the 'button choice' study, via notification bar.
-  *
-  *  Demonstrates `studyUtils` API:
-  *
-  *  - `telemetry` to instrument "shown", "accept", and "leave-study" events.
-  *  - `endStudy` to send a custom study ending.
-  *
-  **/
-
-/* eslint no-unused-vars: ["error", { "varsIgnorePattern": "(EXPORTED_SYMBOLS|Feature)" }]*/
-
 const { utils: Cu } = Components;
-Cu.import("resource://gre/modules/Console.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const EXPORTED_SYMBOLS = ["Feature"];
-
+// Lazy load modules that might not get called if the study
+// doesn't start.
+XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
+  "resource://gre/modules/Timer.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
+  "resource://gre/modules/Timer.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+  "resource://gre/modules/PromiseUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
   "resource:///modules/RecentWindow.jsm");
 
-/** Return most recent NON-PRIVATE browser window, so that we can
-  * maniuplate chrome elements on it.
-  */
-function getMostRecentBrowserWindow() {
-  return RecentWindow.getMostRecentBrowserWindow({
-    private: false,
-    allowPopups: false,
-  });
-}
+// Lazy load the needed services as well.
+XPCOMUtils.defineLazyServiceGetter(this, "idleService",
+  "@mozilla.org/widget/idleservice;1", "nsIIdleService");
 
+const EXPORTED_SYMBOLS = ["Feature"];
+
+// The preference branch we use for storing temporary data.
+const PREF_BRANCH = "extensions.icqstudyv1";
+
+// The following is a list of preferences used by the study,
+// along with their default values. We allow overriding this prefs
+// for testing purposes.
+const STUDY_PREFS = {
+  // How long (in ms) until we can start measurements after the browser
+  // started up.
+  InitDelay: {
+    name: `${PREF_BRANCH}.initDelayMs`,
+    defaultValue: 60 * 1000,
+  },
+  // The pref that stores the date the study was started.
+  StartDate: {
+    name: `${PREF_BRANCH}.startDateMs`,
+    defaultValue: Date.now(), // the current date
+  },
+  // How long (in seconds) user must be idle before we can consider measuring
+  // the speed of the connection.
+  IdleWindowSizeS: {
+    name: `${PREF_BRANCH}.idleWindowS`,
+    defaultValue: 60 * 5, // 5 minutes
+  },
+  // The URI to use for testing the connection quality.
+  Endpoint: {
+    name: `${PREF_BRANCH}.endpoint`,
+    defaultValue: "https://somemozillauri-",
+  },
+};
 
 class Feature {
-  /** A Demonstration feature.
-    *
-    *  - variation: study info about particular client study variation
-    *  - studyUtils:  the configured studyUtils singleton.
-    *  - reasonName: string of bootstrap.js startup/shutdown reason
-    *
-    */
-  constructor({variation, studyUtils, reasonName}) {
-    console.log("initilizing Feature:", variation);
-    // unused.  Some other UI might use the specific variation info for things.
-    this.variation = variation;
-    this.studyUtils = studyUtils;
+  /**
+   *  The core of our study that implements the measuerment logic.
+   *
+   *  @param {variation} study info about particular client study variation
+   *  @param {studyUtils} the configured studyUtils singleton.
+   *  @param {reasonName} string of bootstrap.js startup/shutdown reason
+   *
+   */
+  constructor(variation, studyUtils, reasonName, log) {
+    this._variation = variation;
+    this._studyUtils = studyUtils;
+    this._reasonName = reasonName;
+    this._log = log;
 
-    // only during INSTALL
-    if (reasonName === "ADDON_INSTALL") {
-      this.introductionNotificationBar();
+    // We can't start measuring until some time after the study is started.
+    this._canMeasure = false;
+
+    // Load the study start date from the preferences. This needs to be stored
+    // as a string as the number is too big for "getIntPref".
+    const START_DATE =
+      Services.prefs.getCharPref(STUDY_PREFS.StartDate.name, `${STUDY_PREFS.StartDate.defaultValue}`);
+    try {
+      this._startDateMs = parseFloat(START_DATE);
+    } catch (e) {
+      this._log.warn(`Feature.constructor - unexpected start date ${START_DATE}`);
+      this._startDateMs = Date.now();
     }
   }
 
-  /** Display instrumented 'notification bar' explaining the feature to the user
-    *
-    *   Telemetry Probes:
-    *
-    *   - {event: introduction-shown}
-    *
-    *   - {event: introduction-accept}
-    *
-    *   - {event: introduction-leave-study}
-    *
-    *    Note:  Bar WILL NOT SHOW if the only window open is a private window.
-    *
-    *    Note:  Handling of 'x' is not implemented.  For more complete implementation:
-    *
-    *      https://github.com/gregglind/57-perception-shield-study/blob/680124a/addon/lib/Feature.jsm#L148-L152
-    *
-  */
-  introductionNotificationBar() {
-    const feature = this;
-    const recentWindow = getMostRecentBrowserWindow();
-    const doc = recentWindow.document;
-    const notificationBox = doc.querySelector(
-      "#high-priority-global-notificationbox"
-    );
+  /**
+   * Detect if the study ran for enough time (7 days). If so, bail out and
+   * send the partial data. Please not that this should be taken care of by Normandy,
+   * probably.
+   *
+   * @return {Boolean} true if 7 days passed since the study was installed, false
+   *         otherwise.
+   */
+  HasExpired() {
+    const MAXIMUM_DAYS_IN_MS = 60 * 60 * 24 * 7 * 1000;
+    return Math.abs(this._startDateMs - Date.now()) >= MAXIMUM_DAYS_IN_MS;
+  }
 
-    if (!notificationBox) return;
+  /**
+   * Called when the study it's initialized. This happens on every restart
+   * for eligible users.
+   */
+  async start() {
+    this._log.debug("start");
 
-    // api: https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XUL/Method/appendNotification
-    const notice = notificationBox.appendNotification(
-      "Welcome to the new feature! Look for changes!",
-      "feature orienation",
-      null, // icon
-      notificationBox.PRIORITY_INFO_HIGH, // priority
-      // buttons
-      [{
-        label: "Thanks!",
-        isDefault: true,
-        callback: function acceptButton() {
-          console.log("clicked THANKS!");
-          feature.telemetry({
-            event: "introduction-accept",
-          });
-        },
-      },
-      {
-        label: "I do not want this.",
-        callback: function leaveStudyButton() {
-          console.log("clicked NO!");
-          feature.telemetry({
-            event: "introduction-leave-study",
-          });
-          feature.studyUtils.endStudy("introduction-leave-study");
-        },
-      }],
-      // callback for nb events
-      null
-    );
+    // After this timer is triggered, we will consider running measurements
+    // during idle time.
+    const initDelay =
+      Services.prefs.getIntPref(STUDY_PREFS.InitDelay.name, STUDY_PREFS.InitDelay.defaultValue);
+    this._startupTimer = setTimeout(() => {
+      this._canMeasure = true;
+      this._startupTimer = null;
+    }, initDelay);
 
-    // used by testing to confirm the bar is set with the correct config
-    notice.setAttribute("data-study-config", JSON.stringify(this.variation));
-    feature.telemetry({
-      event: "introduction-shown",
+    // Watch out for idle time windows. We need to store the time in order to remove the
+    // observer at shutdown.
+    this._idleTimeS = Services.prefs.getIntPref(STUDY_PREFS.IdleWindowSizeS.name,
+                                                STUDY_PREFS.IdleWindowSizeS.defaultValue);
+    idleService.addIdleObserver(this, this._idleTimeS);
+  }
+
+  /**
+   * Performs the heavy lifting of the measurement by querying the endpoint.
+   * @throws {Error} if we couldn't find or run the pingsender
+   */
+  async _triggerRequest(win, endpointUrl) {
+    this._log.trace(`_triggerRequest`);
+
+    // Trigger the async XMLHttpRequest.
+    let req = new win.XMLHttpRequest();
+    req.open("GET", endpointUrl, true);
+    req.responseType = "arraybuffer";
+
+    // Define the handler that gets called when the request completes (regardless)
+    // of the status code returned.
+    let deferred = PromiseUtils.defer();
+    req.onload = (event) => {
+      const status = req.status;
+      const statusClass = status - (status % 100);
+      this._log.trace(`_triggerRequest - request completed with status ${status}`);
+      if (statusClass === 200) {
+        deferred.resolve();
+        return;
+      }
+      // We got an unexpected status (4xx, 5xx, ...).
+      deferred.reject();
+    };
+
+    // Define an error handler that makes |_triggerRequest| reject.
+    let errorHandler = (event) => {
+      // Log and make the caller reject with an error.
+      this._log.error(`_triggerRequest - error making request to ${endpointUrl}: ${event.type}`);
+      deferred.reject();
+    };
+    req.onerror = errorHandler;
+    req.onabort = errorHandler;
+    req.ontimeout = errorHandler;
+
+    // Finally trigger.
+    req.send();
+
+    return deferred.promise;
+  }
+
+  /**
+   * This function is called during idle time windows to perform a measurement.
+   */
+  async _performMeasurement() {
+    this._log.debug(`_performMeasurement - _canMeasure: ${this._canMeasure}`);
+
+    // TODO: check if enough time passed since the last download.
+
+    // Get a reference to any non-popup window.
+    let win = RecentWindow.getMostRecentBrowserWindow({ allowPopups: false });
+    if (!win || !win.performance) {
+      this._log.warn("_performMeasurement - no window or ResourceTiming API");
+      return;
+    }
+
+    // Bail out if a request is already in progress.
+    if (this._currentRequest) {
+      this._log.warn("_performMeasurement - request in progress");
+      return;
+    }
+
+    // Trigger the request.
+    const endpointUrl = Services.prefs.getCharPref(STUDY_PREFS.Endpoint.name,
+                                                   `${STUDY_PREFS.Endpoint.defaultValue}`);
+    this._currentRequest = this._triggerRequest(win, endpointUrl);
+    await this._currentRequest;
+    this._currentRequest = null;
+
+    // Extract the performance measurements from the window. |getEntriesByType| will
+    // return a list of |PerformanceEntry|. We further narrow down the set by looking
+    // for the specific request we made.
+    const performanceEntries = win.performance.getEntriesByType("resource").filter(e => {
+      return e.initiatorType == "xmlhttprequest" &&
+             e.name == endpointUrl;
     });
 
-  }
-  /* good practice to have the literal 'sending' be wrapped up */
-  telemetry(stringStringMap) {
-    this.studyUtils.telemetry(stringStringMap);
+    dump("\n**** DEBUG " + performanceEntries[0] + "\n");
   }
 
-  /* no-op shutdown */
-  shutdown() {}
+  observe(subject, topic, data) {
+    this._log.trace(`observe - topic: ${topic}`);
+    if (topic !== "idle") {
+      // We're just looking for the "idle" topic here.
+      return;
+    }
+
+    this._performMeasurement();
+  }
+
+  /**
+   * Called if the user disables the study or it gets uninstalled.
+   */
+  shutdown() {
+    this._log.debug("shutdown");
+
+    // Clean up the timer and the idle observer.
+    if (this._startupTimer) {
+      clearTimeout(this._startupTimer);
+      this._startupTimer = null;
+    }
+
+    if (typeof this._idleTimeS === "number") {
+      idleService.removeIdleObserver(this, this._idleTimeS);
+      this._idleTimeS = null;
+    }
+
+    // Abort the current measurement request, if needed.
+    if (this._currentRequest) {
+      try {
+        this._currentRequest.abort();
+      } catch (e) {
+        this._log.error("shutdown - failed to abort request", e);
+      }
+      this._currentRequest = null;
+    }
+
+    // Remove the preferences from this study.
+    // TODO: uncomment for production.
+    // var defaultBranch = Services.prefs.getDefaultBranch(null);
+    // defaultBranch.deleteBranch(PREF_BRANCH);
+  }
 }
-
-
 
 // webpack:`libraryTarget: 'this'`
 this.EXPORTED_SYMBOLS = EXPORTED_SYMBOLS;

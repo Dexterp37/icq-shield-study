@@ -27,8 +27,8 @@ log.level = Services.prefs.getIntPref(PREF_LOGGING_LEVEL, Log.Level.Warn);
 
 
 // QA NOTE: Study Specific Modules - package.json:addon.chromeResource
-const BASE = `icq-study-v1`;
-XPCOMUtils.defineLazyModuleGetter(this, "Feature", `resource://${BASE}/lib/Feature.jsm`);
+XPCOMUtils.defineLazyModuleGetter(this, "Feature",
+  `resource://${config.study.chromeResourceBasePath}/lib/Feature.jsm`);
 
 
 /* Example addon-specific module imports.  Remember to Unload during shutdown() below.
@@ -39,7 +39,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Feature", `resource://${BASE}/lib/Featu
    NOT in this bootstrap.js.
 
   XPCOMUtils.defineLazyModuleGetter(this, "SomeExportedSymbol",
-    `resource://${BASE}/SomeModule.jsm");
+    `resource://${config.study.chromeResourceBasePath}/SomeModule.jsm");
 
   XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
     "resource://gre/modules/Preferences.jsm");
@@ -62,14 +62,13 @@ async function startup(addonData, reason) {
   studyUtils.setVariation(variation);
   log.debug(`studyUtils has config and variation.name: ${variation.name}.  Ready to send telemetry`);
 
-  /** addon_install and addon_upgrade ONLY:
-   * - note first seen,
-   * - check eligible
-   */
+  // Check if the user is eligible to run this study using the |isEligible|
+  // function when the study is initialized (install or upgrade, the latter
+  // being interpreted as a new install).
   if (reason === REASONS.ADDON_INSTALL || reason === REASONS.ADDON_UPGRADE) {
     //  telemetry "enter" ONCE
     studyUtils.firstSeen();
-    const eligible = await config.isEligible(); // addon-specific
+    const eligible = await config.isEligible();
     if (!eligible) {
       // 1. uses config.endings.ineligible.url if any,
       // 2. sends UT for "ineligible"
@@ -77,8 +76,6 @@ async function startup(addonData, reason) {
       await studyUtils.endStudy({ reason: "ineligible" });
       return;
     }
-  } else {
-    return;
   }
 
   // startup for eligible users.
@@ -86,12 +83,15 @@ async function startup(addonData, reason) {
   // 2. sets activeExperiments in telemetry environment.
   await studyUtils.startup({ reason });
 
-  // if you have code to handle expiration / long-timers, it could go here
-  (function fakeTrackExpiration() {
-  })();
+  // Initiate the chrome-privileged part of the study add-on.
+  this.feature = new Feature(variation, studyUtils, REASONS[reason], log );
+  if (this.feature.HasExpired()) {
+    // Please note that this should probably be taken care of by Normandy.
+    await studyUtils.endStudy({ reason: "expired" });
+    return;
+  }
 
-  // initiate the chrome-privileged part of the study add-on
-  this.feature = new Feature({ variation, studyUtils, reasonName: REASONS[reason], log });
+  await this.feature.start();
 
   // IFF your study has an embedded webExtension, start it.
   const { webExtension } = addonData;
@@ -134,7 +134,7 @@ function shutdown(addonData, reason) {
     // normal shutdown, or 2nd uninstall request
 
     // QA NOTE:  unload addon specific modules here.
-    Cu.unload(`resource://${BASE}/lib/Feature.jsm`);
+    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/Feature.jsm`);
     if (this.feature) {
       this.feature.shutdown();
     }
