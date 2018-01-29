@@ -10,10 +10,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
   "resource://gre/modules/Timer.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
   "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
-  "resource://gre/modules/PromiseUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-  "resource:///modules/RecentWindow.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryController",
+  "resource://gre/modules/TelemetryController.jsm");
 
 // Lazy load the needed services as well.
 XPCOMUtils.defineLazyServiceGetter(this, "idleService",
@@ -108,6 +106,8 @@ class Feature {
     if (!this._startDateMs) {
       // If there's no pref, fixup.
       this._startDateMs = Date.now();
+      // TODO: uncomment below.
+      // Services.prefs.setCharPref(STUDY_PREFS.StartDate.pref this._startDateMs);
     }
 
     this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
@@ -229,6 +229,7 @@ class Feature {
 
       var measurement = {
         latency: 0,
+        fileSize: 0,
         transferCheckpoints: [],
       };
       var requestStartMs = null;
@@ -250,11 +251,6 @@ class Feature {
           return;
         }
 
-        // Add a final measurement to the pool of measurements.
-        const currentTime = window.performance.now();
-        measurement.transferCheckpoints.push(
-          [currentTime - requestStartMs, event.loaded]);
-
         const performanceEntries = window.performance.getEntriesByType("resource").filter(e => {
           return e.initiatorType == "xmlhttprequest" &&
             e.name == endpointUrl;
@@ -273,6 +269,7 @@ class Feature {
 
         // Notify the latency to the parent process.
         measurement.latency = latency;
+        measurement.fileSize = event.total;
         sendMessageToParent("measurement-done", measurement);
       };
       req.onprogress = (progress) => {
@@ -334,10 +331,51 @@ class Feature {
     Services.prefs.setCharPref(STUDY_PREFS.LastMeasurement.pref, Date.now());
   }
 
+  /**
+   * This wraps the utility to send telemetry pings from
+   * the study. We don't want it to throw.
+   *
+   * @param {Object} payload The ping payload to send.
+   */
+  async _sendPing(payload) {
+    this._log.debug("_sendPing");
+    // Unfortunately, we can't simply use |this._studyUtils.telemetry| as
+    // it requires our data to be in a specific format to be serialized to
+    // the experiments parquet dataset.
+    const options = {addClientId: true, addEnvironment: true};
+    await TelemetryController.submitExternalPing("shield-icq-v1", payload || {}, options);
+  }
+
+  /**
+   * Handles a measurement packet received from the content.
+   * This builds a telemetry ping and sends it to our servers.
+   *
+   * @param {Object} data The measurement packet received from
+   *        the content.
+   */
   _handleMeasurementComplete(data) {
     this._log.debug(`_handleMeasurementComplete`);
     this._isMeasuring = false;
-    // TODO: send the partial ping
+
+    // Send the measurement data.
+    let payload = {
+      latency: data.latency,
+      goodput: [],
+    };
+
+    let computeGoodput = (elapsedTimeMs, downloadedInBytes) => {
+      const BYTES_PER_MEBIBYTE = 1048576;
+      const downloadedMebibytes = downloadedInBytes / BYTES_PER_MEBIBYTE;
+      const elapsedSeconds = elapsedTimeMs / 1000.0;
+      return (downloadedMebibytes * 8) / elapsedSeconds;
+    };
+
+    for (let t of data.transferCheckpoints) {
+      const elapsedMs = t[0];
+      payload.goodput.push([elapsedMs, computeGoodput(elapsedMs, t[1])]);
+    }
+
+    this._sendPing(payload);
   }
 
   _handleError(error) {
