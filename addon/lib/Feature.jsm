@@ -62,7 +62,20 @@ const STUDY_PREFS = {
     name: `${PREF_BRANCH}.delayBetweenMeasurementsMs`,
     defaultValue: 7 * 60 * 60 * 1000, // 7 hours
   },
+  // The number of measurements performed throughout the lifetime of the study.
+  PerformedMeasurements: {
+    name: `${PREF_BRANCH}.numPerformedMeasurements`,
+    defaultValue: 0,
+  },
+  // The number of errors encountered during the study.
+  ErrorCount: {
+    name: `${PREF_BRANCH}.errorCount`,
+    defaultValue: 0,
+  },
 };
+
+// The number of measurements to gather.
+const NUM_MEASUREMENTS = 4;
 
 /**
  * Load the a date from a string preference.
@@ -85,6 +98,17 @@ function getDateFromPref(pref) {
     this._log.warn(`getDateFromPref - unexpected start date ${prefDate}`);
   }
   return returnValue;
+}
+
+/**
+ * Increments by 1 the value stored in a pref.
+ * @param {String} pref the preference that the value is stored into.
+ * @return {Number} the newly stored value.
+ */
+function incrementIntPref(pref) {
+  const value = Services.prefs.getIntPref(pref, 0) + 1;
+  Services.prefs.setIntPref(pref, value);
+  return value;
 }
 
 class Feature {
@@ -181,8 +205,8 @@ class Feature {
             !("detail" in e) ||
             !("name" in e.detail) ||
             !("data" in e.detail) ||
-            typeof e.detail.name != "string" ||
-            typeof e.detail.data != "object") {
+            typeof e.detail.name !== "string" ||
+            typeof e.detail.data !== "object") {
           return;
         }
         sendAsyncMessage('icqStudyMsg', {
@@ -216,8 +240,8 @@ class Feature {
 
     // Generate the script to run in the |this._browser| context to measure
     // the performance.
-    let contentScript = (endpointUrl) => {
-      var sendMessageToParent = (name, data={}) => {
+    let contentScript = (url) => {
+      var sendMessageToParent = (name, data = {}) => {
         window.dispatchEvent(new window.CustomEvent("moz-icq-study-v1", {
           bubbles: true,
           detail: {
@@ -236,7 +260,7 @@ class Feature {
       var lastCheckpointTime = null;
 
       var req = new window.XMLHttpRequest();
-      req.open("GET", endpointUrl, true);
+      req.open("GET", url, true);
       req.onloadstart = (event) => {
         // This event is guaranteed to be processed before onload, so use this
         // to set the initial time values.
@@ -252,11 +276,11 @@ class Feature {
         }
 
         const performanceEntries = window.performance.getEntriesByType("resource").filter(e => {
-          return e.initiatorType == "xmlhttprequest" &&
-            e.name == endpointUrl;
+          return e.initiatorType === "xmlhttprequest" &&
+                 e.name === url;
         });
 
-        if (performanceEntries.length != 1) {
+        if (performanceEntries.length !== 1) {
           sendMessageToParent("error", { reason: "performance" });
           return;
         }
@@ -278,10 +302,13 @@ class Feature {
           // We want about 500ms distance between our data points.
           return;
         }
+
+        // TODO: bail out if we're on a slow connection.
+        const deltaTime = currentTime - requestStartMs;
+
         // Save the data point: elapsed time since the transfer started and the amount
         // of bytes that were transferred so far.
-        measurement.transferCheckpoints.push(
-          [currentTime - requestStartMs, progress.loaded]);
+        measurement.transferCheckpoints.push([deltaTime, progress.loaded]);
         // Update the last checkpoint time.
         lastCheckpointTime = currentTime;
       };
@@ -323,7 +350,7 @@ class Feature {
 
     // Generate the request and load the script in the browser.
     this._isMeasuring = true;
-    let url = this._triggerRequest(endpointUrl);
+    const url = this._triggerRequest(endpointUrl);
     this._browser.setAttribute("src", url);
 
     // Set the last measurement date: we don't care if it was a failure or success,
@@ -342,6 +369,13 @@ class Feature {
     // Unfortunately, we can't simply use |this._studyUtils.telemetry| as
     // it requires our data to be in a specific format to be serialized to
     // the experiments parquet dataset.
+    try {
+      if (!this._studyUtils.telemetryConfig.send) {
+        return;
+      }
+    } catch (ex) {
+      this._log.error("_sendPing", ex);
+    }
     const options = {addClientId: true, addEnvironment: true};
     await TelemetryController.submitExternalPing("shield-icq-v1", payload || {}, options);
   }
@@ -376,11 +410,22 @@ class Feature {
     }
 
     this._sendPing(payload);
+
+    // Terminate the study if we gathered enough measurements.
+    const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
+    if (numMeasurements < NUM_MEASUREMENTS) {
+      return;
+    }
+
+    // Terminate this study!
+    this._studyUtils.endStudy({ reason: "ended-neutral" });
   }
 
   _handleError(error) {
     this._log.error(`_handleError - reason ${error.reason}`);
     this._isMeasuring = false;
+
+    const errorCount = incrementIntPref(STUDY_PREFS.ErrorCount.name);
     // TODO: abort the study if we fail too many times?
   }
 
@@ -389,8 +434,8 @@ class Feature {
     if (!message ||
         !("data" in message) ||
         !("name" in message) ||
-        typeof message.name != "string" ||
-        typeof message.data != "object") {
+        typeof message.name !== "string" ||
+        typeof message.data !== "object") {
       this._log.error("receiveMessage - received a malformed message.");
       return;
     }
