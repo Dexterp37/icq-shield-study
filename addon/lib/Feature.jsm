@@ -19,6 +19,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
 XPCOMUtils.defineLazyServiceGetter(this, "idleService",
   "@mozilla.org/widget/idleservice;1", "nsIIdleService");
 
+XPCOMUtils.defineLazyModuleGetter(
+  this, "HiddenFrame", "resource://icq-study-v1/lib/HiddenFrame.jsm"
+);
+
 const EXPORTED_SYMBOLS = ["Feature"];
 
 // The preference branch we use for storing temporary data.
@@ -50,7 +54,40 @@ const STUDY_PREFS = {
     name: `${PREF_BRANCH}.endpoint`,
     defaultValue: "https://somemozillauri-",
   },
+  // The last time a measurement was completed (in ms).
+  LastMeasurement: {
+    name: `${PREF_BRANCH}.lastMeasurementMs`,
+    defaultValue: null,
+  },
+  // The distance between two consecutive measurements (in ms).
+  DelayBetweenMeasurements: {
+    name: `${PREF_BRANCH}.delayBetweenMeasurementsMs`,
+    defaultValue: 7 * 60 * 60 * 1000, // 7 hours
+  },
 };
+
+/**
+ * Load the a date from a string preference.
+ * @param{Object} A preference from |STUDY_PREF|.
+ * @return Milliseconds since the unix epoch or null.
+ */
+function getDateFromPref(pref) {
+  // This needs to be stored as a string as the number is
+  // too big for "getIntPref".
+  const prefDate =
+    Services.prefs.getCharPref(pref.name, null);
+  if (prefDate === null) {
+    return pref.defaultValue;
+  }
+
+  let returnValue = null;
+  try {
+    returnValue = parseFloat(prefDate);
+  } catch (e) {
+    this._log.warn(`getDateFromPref - unexpected start date ${prefDate}`);
+  }
+  return returnValue;
+}
 
 class Feature {
   /**
@@ -67,19 +104,14 @@ class Feature {
     this._reasonName = reasonName;
     this._log = log;
 
-    // We can't start measuring until some time after the study is started.
-    this._canMeasure = false;
-
-    // Load the study start date from the preferences. This needs to be stored
-    // as a string as the number is too big for "getIntPref".
-    const START_DATE =
-      Services.prefs.getCharPref(STUDY_PREFS.StartDate.name, `${STUDY_PREFS.StartDate.defaultValue}`);
-    try {
-      this._startDateMs = parseFloat(START_DATE);
-    } catch (e) {
-      this._log.warn(`Feature.constructor - unexpected start date ${START_DATE}`);
+    this._startDateMs = getDateFromPref(STUDY_PREFS.StartDate);
+    if (!this._startDateMs) {
+      // If there's no pref, fixup.
       this._startDateMs = Date.now();
     }
+
+    this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
+      STUDY_PREFS.DelayBetweenMeasurements.defaultValue);
   }
 
   /**
@@ -107,97 +139,238 @@ class Feature {
     const initDelay =
       Services.prefs.getIntPref(STUDY_PREFS.InitDelay.name, STUDY_PREFS.InitDelay.defaultValue);
     this._startupTimer = setTimeout(() => {
-      this._canMeasure = true;
       this._startupTimer = null;
+
+      // Watch out for idle time windows. We need to store the time in order to remove the
+      // observer at shutdown.
+      this._idleTimeS = Services.prefs.getIntPref(
+        STUDY_PREFS.IdleWindowSizeS.name, STUDY_PREFS.IdleWindowSizeS.defaultValue);
+      idleService.addIdleObserver(this, this._idleTimeS);
     }, initDelay);
 
-    // Watch out for idle time windows. We need to store the time in order to remove the
-    // observer at shutdown.
-    this._idleTimeS = Services.prefs.getIntPref(STUDY_PREFS.IdleWindowSizeS.name,
-                                                STUDY_PREFS.IdleWindowSizeS.defaultValue);
-    idleService.addIdleObserver(this, this._idleTimeS);
+    await this._createFrame();
+  }
+
+  /**
+   * Creates an windowless frame (and an e10s browser) to take the
+   * measurements in.
+   */
+  async _createFrame() {
+    this._hiddenFrame = new HiddenFrame();
+    this._browser = await this._hiddenFrame.get().then(frame => {
+      // Keep a reference to the frame for adding/removing the message listener.
+      this._frame = frame;
+      let doc = frame.document;
+
+      const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+      let browser = doc.createElementNS(XUL_NS, "browser");
+      browser.setAttribute("type", "content");
+      // We need this to be e10s enabled, as the Resource Performance API wouldn't
+      // work in the parent process.
+      browser.setAttribute("remote", "true");
+      browser.setAttribute("disableglobalhistory", "true");
+      doc.documentElement.appendChild(browser);
+      return browser;
+    });
+
+    // Load the frame script into the browser to allow the measurements
+    // to travel back here.
+    let frameScript = () => {
+      addEventListener("moz-icq-study-v1", e => {
+        if (!e ||
+            !("detail" in e) ||
+            !("name" in e.detail) ||
+            !("data" in e.detail) ||
+            typeof e.detail.name != "string" ||
+            typeof e.detail.data != "object") {
+          return;
+        }
+        sendAsyncMessage('icqStudyMsg', {
+          name: e.detail.name,
+          data: e.detail.data,
+        });
+      }, false, true);
+    };
+    this._browser.messageManager.loadFrameScript(
+      "data:,(" + frameScript.toSource() + ")();", true);
+
+    // Also install an handler into the frame. Store the handler so that
+    // we can properly clean up.
+    this._chromeHandler = msg => this.receiveMessage(msg);
+    this._frame.messageManager
+      .addMessageListener("icqStudyMsg", this._chromeHandler);
   }
 
   /**
    * Performs the heavy lifting of the measurement by querying the endpoint.
-   * @throws {Error} if we couldn't find or run the pingsender
+   * This generates a content page and encodes it in a 'data:text/html' URI. The
+   * page, right after loaded, will execute the embedded script to perform
+   * the measurements. The content will communicate back with this add-on by
+   * using CustomEvents.
+   *
+   * @returns {String} the encoded URI that contains a page that will perform
+   *         the measurement.
    */
-  async _triggerRequest(win, endpointUrl) {
+  _triggerRequest(endpointUrl) {
     this._log.trace(`_triggerRequest`);
 
-    // Trigger the async XMLHttpRequest.
-    let req = new win.XMLHttpRequest();
-    req.open("GET", endpointUrl, true);
-    req.responseType = "arraybuffer";
+    // Generate the script to run in the |this._browser| context to measure
+    // the performance.
+    let contentScript = (endpointUrl) => {
+      var sendMessageToParent = (name, data={}) => {
+        window.dispatchEvent(new window.CustomEvent("moz-icq-study-v1", {
+          bubbles: true,
+          detail: {
+            name,
+            data: data || {},
+          },
+        }));
+      };
 
-    // Define the handler that gets called when the request completes (regardless)
-    // of the status code returned.
-    let deferred = PromiseUtils.defer();
-    req.onload = (event) => {
-      const status = req.status;
-      const statusClass = status - (status % 100);
-      this._log.trace(`_triggerRequest - request completed with status ${status}`);
-      if (statusClass === 200) {
-        deferred.resolve();
-        return;
-      }
-      // We got an unexpected status (4xx, 5xx, ...).
-      deferred.reject();
+      var measurement = {
+        latency: 0,
+        transferCheckpoints: [],
+      };
+      var requestStartMs = null;
+      var lastCheckpointTime = null;
+
+      var req = new window.XMLHttpRequest();
+      req.open("GET", endpointUrl, true);
+      req.onloadstart = (event) => {
+        // This event is guaranteed to be processed before onload, so use this
+        // to set the initial time values.
+        requestStartMs = window.performance.now();
+        lastCheckpointTime = requestStartMs;
+      };
+      req.onload = (event) => {
+        const status = req.status;
+        const statusClass = status - (status % 100);
+        if (statusClass !== 200) {
+          sendMessageToParent("error", { reason: "completion", status });
+          return;
+        }
+
+        // Add a final measurement to the pool of measurements.
+        const currentTime = window.performance.now();
+        measurement.transferCheckpoints.push(
+          [currentTime - requestStartMs, event.loaded]);
+
+        const performanceEntries = window.performance.getEntriesByType("resource").filter(e => {
+          return e.initiatorType == "xmlhttprequest" &&
+            e.name == endpointUrl;
+        });
+
+        if (performanceEntries.length != 1) {
+          sendMessageToParent("error", { reason: "performance" });
+          return;
+        }
+
+        // Please note that the performance API will return a zero value for the
+        // measurements if the host doesn't specify a 'Timing-Allow-Origin' response
+        // header.
+        const latency =
+          Math.abs(performanceEntries[0].requestStart - performanceEntries[0].responseStart);
+
+        // Notify the latency to the parent process.
+        measurement.latency = latency;
+        sendMessageToParent("measurement-done", measurement);
+      };
+      req.onprogress = (progress) => {
+        var currentTime = window.performance.now();
+        if ((currentTime - lastCheckpointTime) < 500.0) {
+          // We want about 500ms distance between our data points.
+          return;
+        }
+        // Save the data point: elapsed time since the transfer started and the amount
+        // of bytes that were transferred so far.
+        measurement.transferCheckpoints.push(
+          [currentTime - requestStartMs, progress.loaded]);
+        // Update the last checkpoint time.
+        lastCheckpointTime = currentTime;
+      };
+      req.onerror = () => sendMessageToParent("error", { reason: "request" });
+
+      req.send();
     };
 
-    // Define an error handler that makes |_triggerRequest| reject.
-    let errorHandler = (event) => {
-      // Log and make the caller reject with an error.
-      this._log.error(`_triggerRequest - error making request to ${endpointUrl}: ${event.type}`);
-      deferred.reject();
-    };
-    req.onerror = errorHandler;
-    req.onabort = errorHandler;
-    req.ontimeout = errorHandler;
-
-    // Finally trigger.
-    req.send();
-
-    return deferred.promise;
+    return "data:text/html,<script>(" +
+           encodeURIComponent(contentScript.toSource()) +
+           ")(" + endpointUrl.toSource() + ");</script>";
   }
 
   /**
    * This function is called during idle time windows to perform a measurement.
    */
   async _performMeasurement() {
-    this._log.debug(`_performMeasurement - _canMeasure: ${this._canMeasure}`);
+    this._log.debug("_performMeasurement");
 
-    // TODO: check if enough time passed since the last download.
-
-    // Get a reference to any non-popup window.
-    let win = RecentWindow.getMostRecentBrowserWindow({ allowPopups: false });
-    if (!win || !win.performance) {
-      this._log.warn("_performMeasurement - no window or ResourceTiming API");
+    // Check if enough time passed since the last download.
+    const lastMeasurementDate = getDateFromPref(STUDY_PREFS.LastMeasurement);
+    if (lastMeasurementDate &&
+        Math.abs(lastMeasurementDate - Date.now()) < this._delayBetweenMeasurements) {
+      this._log.debug(`_performMeasurement - skipping idle (last measurement ${lastMeasurementDate})`);
       return;
     }
 
-    // Bail out if a request is already in progress.
-    if (this._currentRequest) {
-      this._log.warn("_performMeasurement - request in progress");
+    // Bail out if a measurement is already in progress.
+    if (this._isMeasuring) {
+      this._log.warn("_performMeasurement - measurement in progress");
       return;
     }
 
     // Trigger the request.
-    const endpointUrl = Services.prefs.getCharPref(STUDY_PREFS.Endpoint.name,
-                                                   `${STUDY_PREFS.Endpoint.defaultValue}`);
-    this._currentRequest = this._triggerRequest(win, endpointUrl);
-    await this._currentRequest;
-    this._currentRequest = null;
+    let endpointUrl =
+      Services.prefs.getCharPref(STUDY_PREFS.Endpoint.name, `${STUDY_PREFS.Endpoint.defaultValue}`);
+    // Append a random number to the request to bypass the cache.
+    endpointUrl = endpointUrl + "?" + (new Date()).getTime();
 
-    // Extract the performance measurements from the window. |getEntriesByType| will
-    // return a list of |PerformanceEntry|. We further narrow down the set by looking
-    // for the specific request we made.
-    const performanceEntries = win.performance.getEntriesByType("resource").filter(e => {
-      return e.initiatorType == "xmlhttprequest" &&
-             e.name == endpointUrl;
-    });
+    // Generate the request and load the script in the browser.
+    this._isMeasuring = true;
+    let url = this._triggerRequest(endpointUrl);
+    this._browser.setAttribute("src", url);
 
-    dump("\n**** DEBUG " + performanceEntries[0] + "\n");
+    // Set the last measurement date: we don't care if it was a failure or success,
+    // as we don't want to measure more frequently than required.
+    Services.prefs.setCharPref(STUDY_PREFS.LastMeasurement.pref, Date.now());
+  }
+
+  _handleMeasurementComplete(data) {
+    this._log.debug(`_handleMeasurementComplete`);
+    this._isMeasuring = false;
+    // TODO: send the partial ping
+  }
+
+  _handleError(error) {
+    this._log.error(`_handleError - reason ${error.reason}`);
+    this._isMeasuring = false;
+    // TODO: abort the study if we fail too many times?
+  }
+
+  receiveMessage(message) {
+    this._log.debug("receiveMessage - message received");
+    if (!message ||
+        !("data" in message) ||
+        !("name" in message) ||
+        typeof message.name != "string" ||
+        typeof message.data != "object") {
+      this._log.error("receiveMessage - received a malformed message.");
+      return;
+    }
+
+    // Handle the incoming message
+    const name = message.data.name;
+    const data = message.data.data;
+    this._log.debug(`receiveMessage - handling ${name}`);
+    switch (name) {
+      case "measurement-done":
+        this._handleMeasurementComplete(data);
+        break;
+      case "error":
+        this._handleError(data);
+        break;
+      default:
+        this._log.error(`receiveMessage - unexpected message '${name}' received`);
+    }
   }
 
   observe(subject, topic, data) {
@@ -211,31 +384,52 @@ class Feature {
   }
 
   /**
+   * Cleanup the internal frame before shutting down.
+   */
+  _cleanupFrame() {
+    // Uninstall the listener.
+    this._frame.removeMessageListener("icqStudyMsg", this._chromeHandler);
+    this._frame = null;
+    this._chromeHandler = null;
+
+    // Dispose of the hidden browser.
+    if (this._browser !== null) {
+      this._browser.remove();
+      this._browser = null;
+    }
+
+    if (this._hiddenFrame) {
+      this._hiddenFrame.destroy();
+      this._hiddenFrame = null;
+    }
+  }
+
+  /**
    * Called if the user disables the study or it gets uninstalled.
    */
   shutdown() {
     this._log.debug("shutdown");
 
     // Clean up the timer and the idle observer.
-    if (this._startupTimer) {
-      clearTimeout(this._startupTimer);
-      this._startupTimer = null;
-    }
+    clearTimeout(this._startupTimer);
 
     if (typeof this._idleTimeS === "number") {
       idleService.removeIdleObserver(this, this._idleTimeS);
       this._idleTimeS = null;
     }
 
-    // Abort the current measurement request, if needed.
-    if (this._currentRequest) {
+    // TODO: Abort the current measurement request, if needed.
+    /*if (this._currentRequest) {
       try {
         this._currentRequest.abort();
       } catch (e) {
         this._log.error("shutdown - failed to abort request", e);
       }
       this._currentRequest = null;
-    }
+    }*/
+
+    // As a last thing, cleanup the internal frame.
+    this._cleanupFrame();
 
     // Remove the preferences from this study.
     // TODO: uncomment for production.

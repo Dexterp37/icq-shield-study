@@ -104,7 +104,6 @@ async function startup(addonData, reason) {
       browser.runtime.onMessage.addListener(studyUtils.respondToWebExtensionMessage);
       // other browser.runtime.onMessage handlers for your addon, if any
       // this.feature.afterWebExtensionStartup(browser);
-
     });
   }
 
@@ -129,12 +128,14 @@ function shutdown(addonData, reason) {
       // we are the first 'uninstall' requestor => must be user action.
       log.debug("probably: user requested shutdown");
       studyUtils.endStudy({ reason: "user-disable" });
-      return;
+      // TODO: Why is the following return needed!?
+      // return;
     }
     // normal shutdown, or 2nd uninstall request
 
     // QA NOTE:  unload addon specific modules here.
     Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/Feature.jsm`);
+    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/HiddenFrame.jsm`);
     if (this.feature) {
       this.feature.shutdown();
     }
