@@ -16,6 +16,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetryController",
 // Lazy load the needed services as well.
 XPCOMUtils.defineLazyServiceGetter(this, "idleService",
   "@mozilla.org/widget/idleservice;1", "nsIIdleService");
+XPCOMUtils.defineLazyServiceGetter(this, "CaptivePortalService",
+  "@mozilla.org/network/captive-portal-service;1", "nsICaptivePortalService");
 
 XPCOMUtils.defineLazyModuleGetter(
   this, "HiddenFrame", "resource://icq-study-v1/lib/HiddenFrame.jsm"
@@ -65,11 +67,6 @@ const STUDY_PREFS = {
   // The number of measurements performed throughout the lifetime of the study.
   PerformedMeasurements: {
     name: `${PREF_BRANCH}.numPerformedMeasurements`,
-    defaultValue: 0,
-  },
-  // The number of errors encountered during the study.
-  ErrorCount: {
-    name: `${PREF_BRANCH}.errorCount`,
     defaultValue: 0,
   },
 };
@@ -297,9 +294,15 @@ class Feature {
         }));
       };
 
+      var getConnectionType = (elapsed, downloadedBytes, latency = null) => {
+        const downlinkKbps = (downloadedBytes * 8) / Math.max(elapsed, 1.0);
+        return inferConnectionLabel(downlinkKbps, latency);
+      };
+
       var measurement = {
         latency: 0,
         fileSize: 0,
+        connType: "unknown",
         transferCheckpoints: [],
       };
       var requestStartMs = null;
@@ -338,8 +341,10 @@ class Feature {
           Math.abs(performanceEntries[0].requestStart - performanceEntries[0].responseStart);
 
         // Notify the latency to the parent process.
+        const deltaTime = window.performance.now() - requestStartMs;
         measurement.latency = latency;
         measurement.fileSize = event.total;
+        measurement.connType = getConnectionType(deltaTime, progress.loaded, latency);
         sendMessageToParent("measurement-done", measurement);
       };
       req.onprogress = (progress) => {
@@ -349,10 +354,15 @@ class Feature {
           return;
         }
 
-        // TODO: bail out if we're on a slow connection.
+        // Bail out if we're on a slow connection.
         const deltaTime = currentTime - requestStartMs;
-        const downlinkKbps = (progress.loaded * 8) / Math.max(latency, 1.0);
-        console.log(inferConnectionLabel(downlinkKbps, null));
+        const connType = getConnectionType(deltaTime, progress.loaded);
+        if (connType === "slow-2g" || connType === "2g") {
+          // If we're on a slow connection, bail out.
+          measurement.connType = connType;
+          req.abort();
+          return;
+        }
 
         // Save the data point: elapsed time since the transfer started and the amount
         // of bytes that were transferred so far.
@@ -360,8 +370,8 @@ class Feature {
         // Update the last checkpoint time.
         lastCheckpointTime = currentTime;
       };
-      req.onabort = () => sendMessageToParent("error", { reason: "aborted" });
-      req.onerror = () => sendMessageToParent("error", { reason: "request" });
+      req.onabort = () => sendMessageToParent("error", { reason: "aborted", partial: measurement });
+      req.onerror = () => sendMessageToParent("error", { reason: "request", partial: measurement });
 
       req.send();
     };
@@ -374,10 +384,48 @@ class Feature {
   }
 
   /**
+   * Try to check if we're offline.
+   * @return {Boolean} true if we're offline or behind a captive portal, false
+   *         otherwise.
+   */
+  _offline() {
+    // Services.io.offline has slowly become fairly useless over the years - it
+    // no longer attempts to track the actual network state by default, but one
+    // thing stays true: if it says we're offline then we are definitely not online.
+    //
+    // We also ask the captive portal service if we are behind a locked captive
+    // portal.
+    //
+    // We don't check on the NetworkLinkService however, because it gave us
+    // false positives in the past in a vm environment.
+    try {
+      if (Services.io.offline ||
+          CaptivePortalService.state == CaptivePortalService.LOCKED_PORTAL) {
+        return true;
+      }
+    } catch (ex) {
+      this._log.warn("Could not determine network status.", ex);
+    }
+    return false;
+  },
+
+  /**
    * This function is called during idle time windows to perform a measurement.
    */
   async _performMeasurement() {
     this._log.debug("_performMeasurement");
+
+    // Did we expire while the study was running?
+    if (this.HasExpired()) {
+      await this._studyUtils.endStudy({ reason: "expired" });
+      return;
+    }
+
+    // Are we online? Do we have network connectivity?
+    if (this._offline()) {
+      this._log.debug("_performMeasurement - offline");
+      return;
+    }
 
     // Check if enough time passed since the last download.
     const lastMeasurementDate = getDateFromPref(STUDY_PREFS.LastMeasurement);
@@ -410,13 +458,35 @@ class Feature {
   }
 
   /**
-   * This wraps the utility to send telemetry pings from
-   * the study. We don't want it to throw.
+   * Generate a custom ping and send it along with our data,
    *
-   * @param {Object} payload The ping payload to send.
+   * @param {Object} data The full or partial data to send with the ping.
+   * @param {String} reason The reason for sending this ping, i.e. "progress"
+   *                 or "aborted".
    */
-  async _sendPing(payload) {
-    this._log.debug("_sendPing");
+  _generateAndSendPing(data, reason) {
+    // Send the measurement data.
+    let payload = {
+      reason,
+      latency: data.latency,
+      fileSize: data.fileSize,
+      connType: data.connType,
+      goodput: [],
+    };
+
+    let computeGoodput = (elapsedTimeMs, downloadedInBytes) => {
+      const BYTES_PER_MEBIBYTE = 1048576;
+      const downloadedMebibytes = downloadedInBytes / BYTES_PER_MEBIBYTE;
+      const elapsedSeconds = elapsedTimeMs / 1000.0;
+      return (downloadedMebibytes * 8) / elapsedSeconds;
+    };
+
+    const checkpoints = data.transferCheckpoints || [];
+    for (let t of checkpoints) {
+      const elapsedMs = t[0];
+      payload.goodput.push([elapsedMs, computeGoodput(elapsedMs, t[1])]);
+    }
+
     // Unfortunately, we can't simply use |this._studyUtils.telemetry| as
     // it requires our data to be in a specific format to be serialized to
     // the experiments parquet dataset.
@@ -425,10 +495,10 @@ class Feature {
         return;
       }
     } catch (ex) {
-      this._log.error("_sendPing", ex);
+      this._log.error("_generateAndSendPing", ex);
     }
     const options = {addClientId: true, addEnvironment: true};
-    await TelemetryController.submitExternalPing("shield-icq-v1", payload || {}, options);
+    await TelemetryController.submitExternalPing("shield-icq-v1", payload, options);
   }
 
   /**
@@ -443,24 +513,7 @@ class Feature {
     this._isMeasuring = false;
 
     // Send the measurement data.
-    let payload = {
-      latency: data.latency,
-      goodput: [],
-    };
-
-    let computeGoodput = (elapsedTimeMs, downloadedInBytes) => {
-      const BYTES_PER_MEBIBYTE = 1048576;
-      const downloadedMebibytes = downloadedInBytes / BYTES_PER_MEBIBYTE;
-      const elapsedSeconds = elapsedTimeMs / 1000.0;
-      return (downloadedMebibytes * 8) / elapsedSeconds;
-    };
-
-    for (let t of data.transferCheckpoints) {
-      const elapsedMs = t[0];
-      payload.goodput.push([elapsedMs, computeGoodput(elapsedMs, t[1])]);
-    }
-
-    this._sendPing(payload);
+    this._generateAndSendPing(data, "progress");
 
     // Terminate the study if we gathered enough measurements.
     const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
@@ -472,12 +525,15 @@ class Feature {
     this._studyUtils.endStudy({ reason: "ended-neutral" });
   }
 
-  _handleError(error) {
-    this._log.error(`_handleError - reason ${error.reason}`);
+  _handleError(data) {
+    this._log.error(`_handleError - reason ${data.reason}`);
     this._isMeasuring = false;
 
-    const errorCount = incrementIntPref(STUDY_PREFS.ErrorCount.name);
-    // TODO: abort the study if we fail too many times?
+    // Send any partial data that we have.
+    this._generateAndSendPing(data.partial, "aborted");
+
+    // Terminate this study!
+    this._studyUtils.endStudy({ reason: "ended-negative" });
   }
 
   receiveMessage(message) {
