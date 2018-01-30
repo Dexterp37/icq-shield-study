@@ -76,6 +76,8 @@ const STUDY_PREFS = {
 
 // The number of measurements to gather.
 const NUM_MEASUREMENTS = 4;
+// How distant apart our sampling should be when measuring.
+const DOWNLINK_SAMPLING_MS = 500;
 
 /**
  * Load the a date from a string preference.
@@ -109,6 +111,50 @@ function incrementIntPref(pref) {
   const value = Services.prefs.getIntPref(pref, 0) + 1;
   Services.prefs.setIntPref(pref, value);
   return value;
+}
+
+/**
+ * Try to infer the connection type from the current latency
+ * and downlink speed.
+ *
+ * @param {Number} downlinkKbps the link bandwidth in Kbps.
+ * @param {Number}[latencyMs] the link round-trip-time in milliseconds.
+ * @return {String} One of "slow-2g", "2g", "3g", "4g" or "unknown".
+ */
+function inferConnectionLabel(downlinkKbps, latencyMs=null) {
+  // The following table is derived from the values reported in the spec
+  // here: https://wicg.github.io/netinfo/#effective-connection-types
+  const CONNECTION_TYPES = [
+    {
+      minRttMs: 2000,
+      maxDownlinkKbps: 50,
+      label: "slow-2g",
+    },
+    {
+      minRttMs: 1400,
+      maxDownlinkKbps: 70,
+      label: "2g",
+    },
+    {
+      minRttMs: 270,
+      maxDownlinkKbps: 700,
+      label: "3g",
+    },
+    {
+      minRttMs: 0,
+      maxDownlinkKbps: 700,
+      label: "4g",
+    },
+  ];
+
+  for (let type of CONNECTION_TYPES) {
+    if ((latencyMs !== null && latencyMs >= type.minRttMs) ||
+        (downlinkKbps <= type.maxDownlinkKbps)) {
+      return type.label;
+    }
+  }
+
+  return "unknown";
 }
 
 class Feature {
@@ -276,8 +322,8 @@ class Feature {
         }
 
         const performanceEntries = window.performance.getEntriesByType("resource").filter(e => {
-          return e.initiatorType === "xmlhttprequest" &&
-                 e.name === url;
+          return e.initiatorType == "xmlhttprequest" &&
+                 e.name == url;
         });
 
         if (performanceEntries.length !== 1) {
@@ -298,13 +344,15 @@ class Feature {
       };
       req.onprogress = (progress) => {
         var currentTime = window.performance.now();
-        if ((currentTime - lastCheckpointTime) < 500.0) {
-          // We want about 500ms distance between our data points.
+        if ((currentTime - lastCheckpointTime) < DOWNLINK_SAMPLING_MS) {
+          // We want about DOWNLINK_SAMPLING_MS distance between our data points.
           return;
         }
 
         // TODO: bail out if we're on a slow connection.
         const deltaTime = currentTime - requestStartMs;
+        const downlinkKbps = (progress.loaded * 8) / Math.max(latency, 1.0);
+        console.log(inferConnectionLabel(downlinkKbps, null));
 
         // Save the data point: elapsed time since the transfer started and the amount
         // of bytes that were transferred so far.
@@ -312,12 +360,15 @@ class Feature {
         // Update the last checkpoint time.
         lastCheckpointTime = currentTime;
       };
+      req.onabort = () => sendMessageToParent("error", { reason: "aborted" });
       req.onerror = () => sendMessageToParent("error", { reason: "request" });
 
       req.send();
     };
 
-    return "data:text/html,<script>(" +
+    return "data:text/html,<script>" +
+           encodeURIComponent(inferConnectionLabel.toSource()) +
+           "</script><script>(" +
            encodeURIComponent(contentScript.toSource()) +
            ")(" + endpointUrl.toSource() + ");</script>";
   }
