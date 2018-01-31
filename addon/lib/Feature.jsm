@@ -75,8 +75,8 @@ const STUDY_PREFS = {
 const NUM_MEASUREMENTS = 4;
 // How distant apart our sampling should be when measuring.
 const DOWNLINK_SAMPLING_MS = 500;
-// How long to observe before expiring the study.
-const OBSERVATION_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+// How long to observe before expiring the study (3 weeks).
+const OBSERVATION_DAYS_MS = 21 * 24 * 60 * 60 * 1000;
 
 /**
  * Load the a date from a string preference.
