@@ -133,12 +133,14 @@ function shutdown(addonData, reason) {
     }
     // normal shutdown, or 2nd uninstall request
 
-    // QA NOTE:  unload addon specific modules here.
-    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/Feature.jsm`);
-    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/HiddenFrame.jsm`);
+    // Shut down before unloading the JSM file.
     if (this.feature) {
       this.feature.shutdown();
     }
+
+    // QA NOTE:  unload addon specific modules here.
+    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/Feature.jsm`);
+    Cu.unload(`resource://${config.study.chromeResourceBasePath}/lib/HiddenFrame.jsm`);
 
     // clean up our modules.
     Cu.unload(CONFIGPATH);
