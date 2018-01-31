@@ -1,12 +1,9 @@
 {
-  "name": "WebExtension-study-BrowserActionButtonChoice",
+  "name": "ICQ-study",
   "version": "0.2.0",
   "manifest_version": 2,
   "background": {
     "scripts": ["background.js"]
   },
-  "browser_action": {
-    "browser_style": true,
-    "default_title": "button label"
-  }
+  "browser_action": {  }
 }
