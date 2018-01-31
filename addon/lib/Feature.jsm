@@ -327,7 +327,7 @@ class Feature {
         const status = req.status;
         const statusClass = status - (status % 100);
         if (statusClass !== 200) {
-          sendMessageToParent("error", { reason: "completion", status });
+          sendMessageToParent("error", { reason: "wrong-status", status });
           return;
         }
 
@@ -337,7 +337,7 @@ class Feature {
         });
 
         if (performanceEntries.length !== 1) {
-          sendMessageToParent("error", { reason: "performance" });
+          sendMessageToParent("error", { reason: "missing-performance" });
           return;
         }
 
@@ -383,7 +383,7 @@ class Feature {
         lastCheckpointTime = currentTime;
       };
       req.onabort = () => sendMessageToParent("error", {
-        reason: "aborted-request",
+        reason: "request-aborted",
         partial: measurement
       });
       req.onerror = () => sendMessageToParent("error", {
