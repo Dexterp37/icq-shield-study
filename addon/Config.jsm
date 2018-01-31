@@ -86,18 +86,19 @@ var config = {
     return AppConstants.platform === "win";
   },
 
-  /* Button study branches and sample weights
-     - test kittens vs. puppies if we can only have one.
-       - downweight lizards.  Lizards is a 'poison' branch, meant to
-         help control for novelty effect
-  */
+  /**
+   * We want 20% of users to be in the control group: nothing
+   * should happen there.
+   */
   "weightedVariations": [
-    {"name": "kittens",
-      "weight": 1.5},
-    {"name": "puppers",
-      "weight": 1.5},
-    {"name": "lizard",
-      "weight": 1},  // we want more puppers in our sample
+    {
+      "name": "control",
+      "weight": 0.2,
+    },
+    {
+      "name": "test",
+      "weight": 0.8,
+    },
   ],
 
 

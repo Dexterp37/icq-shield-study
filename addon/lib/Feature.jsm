@@ -75,6 +75,8 @@ const STUDY_PREFS = {
 const NUM_MEASUREMENTS = 4;
 // How distant apart our sampling should be when measuring.
 const DOWNLINK_SAMPLING_MS = 500;
+// How long to observe before expiring the study.
+const OBSERVATION_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Load the a date from a string preference.
@@ -173,8 +175,7 @@ class Feature {
     if (!this._startDateMs) {
       // If there's no pref, fixup.
       this._startDateMs = Date.now();
-      // TODO: uncomment below.
-      // Services.prefs.setCharPref(STUDY_PREFS.StartDate.pref this._startDateMs);
+      Services.prefs.setCharPref(STUDY_PREFS.StartDate.pref this._startDateMs);
     }
 
     this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
@@ -182,16 +183,15 @@ class Feature {
   }
 
   /**
-   * Detect if the study ran for enough time (7 days). If so, bail out and
-   * send the partial data. Please not that this should be taken care of by Normandy,
+   * Detect if the study ran for enough time (OBSERVATION_DAYS_MS). If so, bail out and
+   * send the partial data. Please note that this should be taken care of by Normandy,
    * probably.
    *
-   * @return {Boolean} true if 7 days passed since the study was installed, false
+   * @return {Boolean} true if enough days passed since the study was installed, false
    *         otherwise.
    */
   HasExpired() {
-    const MAXIMUM_DAYS_IN_MS = 60 * 60 * 24 * 7 * 1000;
-    return Math.abs(this._startDateMs - Date.now()) >= MAXIMUM_DAYS_IN_MS;
+    return Math.abs(this._startDateMs - Date.now()) >= OBSERVATION_DAYS_MS;
   }
 
   /**
@@ -214,6 +214,12 @@ class Feature {
         STUDY_PREFS.IdleWindowSizeS.name, STUDY_PREFS.IdleWindowSizeS.defaultValue);
       idleService.addIdleObserver(this, this._idleTimeS);
     }, initDelay);
+
+    // If we're in the control group, don't bother creating the frame.
+    if (this._variation.name === "control") {
+      this._log.debug("start - control group, bailing out");
+      return;
+    }
 
     await this._createFrame();
   }
@@ -418,6 +424,12 @@ class Feature {
     // Did we expire while the study was running?
     if (this.HasExpired()) {
       await this._studyUtils.endStudy({ reason: "expired" });
+      return;
+    }
+
+    // If we're in the control group, do nothing.
+    if (this._variation.name === "control") {
+      this._log.debug("_performMeasurement - control group, bailing out");
       return;
     }
 
