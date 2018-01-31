@@ -258,7 +258,7 @@ class Feature {
             typeof e.detail.data !== "object") {
           return;
         }
-        // eslint-disable-next-line no-undef
+        /* eslint-disable-next-line no-undef */
         sendAsyncMessage("icqStudyMsg", {
           name: e.detail.name,
           data: e.detail.data,
@@ -290,7 +290,7 @@ class Feature {
 
     // Generate the script to run in the |this._browser| context to measure
     // the performance.
-    let contentScript = (url) => {
+    let contentScript = (url, samplingWindowMs) => {
       var sendMessageToParent = (name, data = {}) => {
         window.dispatchEvent(new window.CustomEvent("moz-icq-study-v1", {
           bubbles: true,
@@ -349,6 +349,11 @@ class Feature {
 
         // Notify the latency to the parent process.
         const deltaTime = window.performance.now() - requestStartMs;
+        if (measurement.transferCheckpoints.length === 0) {
+          // Have at least one measurement if we downloaded the file in less than
+          // samplingWindowMs.
+          measurement.transferCheckpoints.push([deltaTime, event.loaded]);
+        }
         measurement.latency = latency;
         measurement.fileSize = event.total;
         measurement.connType = getConnectionType(deltaTime, event.loaded, latency);
@@ -356,8 +361,8 @@ class Feature {
       };
       req.onprogress = (progress) => {
         var currentTime = window.performance.now();
-        if ((currentTime - lastCheckpointTime) < DOWNLINK_SAMPLING_MS) {
-          // We want about DOWNLINK_SAMPLING_MS distance between our data points.
+        if ((currentTime - lastCheckpointTime) < samplingWindowMs) {
+          // We want about samplingWindowMs distance between our data points.
           return;
         }
 
@@ -377,8 +382,14 @@ class Feature {
         // Update the last checkpoint time.
         lastCheckpointTime = currentTime;
       };
-      req.onabort = () => sendMessageToParent("error", { reason: "aborted", partial: measurement });
-      req.onerror = () => sendMessageToParent("error", { reason: "request", partial: measurement });
+      req.onabort = () => sendMessageToParent("error", {
+        reason: "aborted-request",
+        partial: measurement
+      });
+      req.onerror = () => sendMessageToParent("error", {
+        reason: "request-error",
+        partial: measurement
+      });
 
       req.send();
     };
@@ -387,7 +398,7 @@ class Feature {
            encodeURIComponent(inferConnectionLabel.toSource()) +
            "</script><script>(" +
            encodeURIComponent(contentScript.toSource()) +
-           ")(" + endpointUrl.toSource() + ");</script>";
+           ")(" + endpointUrl.toSource() + ", " + DOWNLINK_SAMPLING_MS + ");</script>";
   }
 
   /**
@@ -600,7 +611,7 @@ class Feature {
    */
   _cleanupFrame() {
     // Uninstall the listener.
-    this._frame.removeMessageListener("icqStudyMsg", this._chromeHandler);
+    this._frame.messageManager.removeMessageListener("icqStudyMsg", this._chromeHandler);
     this._frame = null;
     this._chromeHandler = null;
 
