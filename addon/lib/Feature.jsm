@@ -492,6 +492,7 @@ class Feature {
     // Send the measurement data.
     let payload = {
       reason,
+      type: data.type || "",
       latency: data.latency,
       fileSize: data.fileSize,
       connType: data.connType,
@@ -558,7 +559,7 @@ class Feature {
     this._isMeasuring = false;
 
     // Send any partial data that we have.
-    await this._generateAndSendPing(data.partial, "aborted");
+    await this._generateAndSendPing(data.partial, "error");
 
     // Terminate this study!
     this._studyUtils.endStudy({ reason: "ended-negative" });
