@@ -327,7 +327,7 @@ class Feature {
         const status = req.status;
         const statusClass = status - (status % 100);
         if (statusClass !== 200) {
-          sendMessageToParent("error", { reason: "wrong-status", status });
+          sendMessageToParent("error", { type: "wrong-status", status });
           return;
         }
 
@@ -337,7 +337,7 @@ class Feature {
         });
 
         if (performanceEntries.length !== 1) {
-          sendMessageToParent("error", { reason: "missing-performance" });
+          sendMessageToParent("error", { type: "missing-performance" });
           return;
         }
 
@@ -383,11 +383,11 @@ class Feature {
         lastCheckpointTime = currentTime;
       };
       req.onabort = () => sendMessageToParent("error", {
-        reason: "request-aborted",
+        type: "request-aborted",
         partial: measurement
       });
       req.onerror = () => sendMessageToParent("error", {
-        reason: "request-error",
+        type: "request-error",
         partial: measurement
       });
 
@@ -537,11 +537,12 @@ class Feature {
     this._isMeasuring = false;
 
     // Send the measurement data.
-    await this._generateAndSendPing(data, "progress");
+    const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
+    const isFinalMeasurement = numMeasurements >= NUM_MEASUREMENTS;
+    await this._generateAndSendPing(data, isFinalMeasurement ? "final" : "progress");
 
     // Terminate the study if we gathered enough measurements.
-    const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
-    if (numMeasurements < NUM_MEASUREMENTS) {
+    if (!isFinalMeasurement) {
       return;
     }
 
