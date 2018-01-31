@@ -120,7 +120,7 @@ function incrementIntPref(pref) {
  * @param {Number}[latencyMs] the link round-trip-time in milliseconds.
  * @return {String} One of "slow-2g", "2g", "3g", "4g" or "unknown".
  */
-function inferConnectionLabel(downlinkKbps, latencyMs=null) {
+function inferConnectionLabel(downlinkKbps, latencyMs = null) {
   // The following table is derived from the values reported in the spec
   // here: https://wicg.github.io/netinfo/#effective-connection-types
   const CONNECTION_TYPES = [
@@ -175,7 +175,7 @@ class Feature {
     if (!this._startDateMs) {
       // If there's no pref, fixup.
       this._startDateMs = Date.now();
-      Services.prefs.setCharPref(STUDY_PREFS.StartDate.pref this._startDateMs);
+      Services.prefs.setCharPref(STUDY_PREFS.StartDate.name, this._startDateMs);
     }
 
     this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
@@ -258,7 +258,8 @@ class Feature {
             typeof e.detail.data !== "object") {
           return;
         }
-        sendAsyncMessage('icqStudyMsg', {
+        // eslint-disable-next-line no-undef
+        sendAsyncMessage("icqStudyMsg", {
           name: e.detail.name,
           data: e.detail.data,
         });
@@ -350,7 +351,7 @@ class Feature {
         const deltaTime = window.performance.now() - requestStartMs;
         measurement.latency = latency;
         measurement.fileSize = event.total;
-        measurement.connType = getConnectionType(deltaTime, progress.loaded, latency);
+        measurement.connType = getConnectionType(deltaTime, event.loaded, latency);
         sendMessageToParent("measurement-done", measurement);
       };
       req.onprogress = (progress) => {
@@ -413,7 +414,7 @@ class Feature {
       this._log.warn("Could not determine network status.", ex);
     }
     return false;
-  },
+  }
 
   /**
    * This function is called during idle time windows to perform a measurement.
@@ -476,7 +477,7 @@ class Feature {
    * @param {String} reason The reason for sending this ping, i.e. "progress"
    *                 or "aborted".
    */
-  _generateAndSendPing(data, reason) {
+  async _generateAndSendPing(data, reason) {
     // Send the measurement data.
     let payload = {
       reason,
@@ -520,12 +521,12 @@ class Feature {
    * @param {Object} data The measurement packet received from
    *        the content.
    */
-  _handleMeasurementComplete(data) {
+  async _handleMeasurementComplete(data) {
     this._log.debug(`_handleMeasurementComplete`);
     this._isMeasuring = false;
 
     // Send the measurement data.
-    this._generateAndSendPing(data, "progress");
+    await this._generateAndSendPing(data, "progress");
 
     // Terminate the study if we gathered enough measurements.
     const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
@@ -537,17 +538,23 @@ class Feature {
     this._studyUtils.endStudy({ reason: "ended-neutral" });
   }
 
-  _handleError(data) {
+  /**
+   * Handles errors encountered when performing the measurement.
+   */
+  async _handleError(data) {
     this._log.error(`_handleError - reason ${data.reason}`);
     this._isMeasuring = false;
 
     // Send any partial data that we have.
-    this._generateAndSendPing(data.partial, "aborted");
+    await this._generateAndSendPing(data.partial, "aborted");
 
     // Terminate this study!
     this._studyUtils.endStudy({ reason: "ended-negative" });
   }
 
+  /**
+   * Handles a message coming from the content.
+   */
   receiveMessage(message) {
     this._log.debug("receiveMessage - message received");
     if (!message ||
@@ -575,6 +582,9 @@ class Feature {
     }
   }
 
+  /**
+   * Handles the idle notification.
+   */
   observe(subject, topic, data) {
     this._log.trace(`observe - topic: ${topic}`);
     if (topic !== "idle") {
