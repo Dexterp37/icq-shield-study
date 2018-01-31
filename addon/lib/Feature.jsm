@@ -620,16 +620,6 @@ class Feature {
       this._idleTimeS = null;
     }
 
-    // TODO: Abort the current measurement request, if needed.
-    /*if (this._currentRequest) {
-      try {
-        this._currentRequest.abort();
-      } catch (e) {
-        this._log.error("shutdown - failed to abort request", e);
-      }
-      this._currentRequest = null;
-    }*/
-
     // As a last thing, cleanup the internal frame.
     this._cleanupFrame();
 
