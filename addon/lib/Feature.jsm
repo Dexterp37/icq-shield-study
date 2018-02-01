@@ -394,7 +394,7 @@ class Feature {
       req.send();
     };
 
-    return "data:text/html,<script>" +
+    return "data:text/html,<meta charset='utf8'/><script>" +
            encodeURIComponent(inferConnectionLabel.toSource()) +
            "</script><script>(" +
            encodeURIComponent(contentScript.toSource()) +
