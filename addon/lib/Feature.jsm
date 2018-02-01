@@ -41,7 +41,7 @@ const STUDY_PREFS = {
   // The pref that stores the date the study was started.
   StartDate: {
     name: `${PREF_BRANCH}.startDateMs`,
-    defaultValue: Date.now(), // the current date
+    defaultValue: null,
   },
   // How long (in seconds) user must be idle before we can consider measuring
   // the speed of the connection.
@@ -175,7 +175,7 @@ class Feature {
     if (!this._startDateMs) {
       // If there's no pref, fixup.
       this._startDateMs = Date.now();
-      Services.prefs.setCharPref(STUDY_PREFS.StartDate.name, this._startDateMs);
+      Services.prefs.setCharPref(STUDY_PREFS.StartDate.name, `${this._startDateMs}`);
     }
 
     this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
@@ -478,7 +478,7 @@ class Feature {
 
     // Set the last measurement date: we don't care if it was a failure or success,
     // as we don't want to measure more frequently than required.
-    Services.prefs.setCharPref(STUDY_PREFS.LastMeasurement.pref, Date.now());
+    Services.prefs.setCharPref(STUDY_PREFS.LastMeasurement.name, `${Date.now()}`);
   }
 
   /**
