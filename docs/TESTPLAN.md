@@ -1,161 +1,28 @@
-# Test Plan for the 57-Perception-Study Addon
-
-## Automated Testing
-
-`npm test` verifies the telemetry payload as expected at firefox startup and add-on installation in a clean profile, then does **optimistic testing** of the *commonest path* though the study for a user
-
-- prove the notification bar ui opens
-- *clicking on the left-most button presented*.
-- verifying that sent Telemetry is correct.
-
-Code at [./test/functional_test.js].
+# Test plan for this add-on
+Refer to the full test-plan that can be found [here](https://docs.google.com/document/d/1ArgeAlG-pF4erstCaldwXl7_gq9p1kVY5JQvI789TE0/edit).
 
 ## Manual / QA TEST Instructions
+Start by downloading Firefox 59 (Release).
 
-Assumptions / Thoughts
+- Navigate to *about:config* and set the following preferences. (If a preference does not exist, create it be right-clicking in the white area and selecting New -> String or Integer depending on the type of preference)
+- Set `extensions.legacy.enabled` to `true`. This permits the loading of the embedded Web Extension since new versions of Firefox are becoming restricted to pure Web Extensions only.
+- Set `shield.test.variation` to `test` or `control`.
+- Set any useful preference from the section below, before the add-on is installed.
+- [Download](TBD) and install the latest signed XPI
 
-1.  Please ask if you want  more command-line tools to do this testing.
+## Useful preferences
+The following is a list of preferences that can be overridden to simplify testing.
 
-### BEFORE EACH TEST: INSTALL THE ADDON to a CLEAN (NEW) PROFILE
+- `extensions.icqstudyv1.initDelayMs` (*default: 6000*, or 60 seconds), how long (in ms) until we can start measurements after the browser started up.
+- `extensions.icqstudyv1.startDateMs`, a string that stores the date the study was started on (e.g. from `Date.now()`).
+- `extensions.icqstudyv1.idleWindowS` (*default: 300*, or 5 minutes), how long (in seconds) user must be idle before we can consider measuring the speed of the connection.
+- `extensions.icqstudyv1.endpoint`, the URI to use for evaluating the connection quality.
+- `extensions.icqstudyv1.lastMeasurementMs`, the last time (in ms) a measurement was completed (e.g. from `Date.now()`).
+- `extensions.icqstudyv1.delayBetweenMeasurementsMs` (*default: 25200000*, or 7 hours), the time (in ms) between two consecutive measurements.
+- `extensions.icqstudyv1.numPerformedMeasurements`, the number of measurements performed throughout the lifetime of the study.
 
-0.  (create profile:  https://developer.mozilla.org/en-US/Firefox/Multiple_profiles, or via some other method)
-1.  In your Firefox profile
-2.  `about:debugging` > `install temporary addon`
+Additionally, the following SHIELD specific preferences can be changed.
 
-As an alternative (command line) cli method:
+- `shield.testing.logging.level`, controls the log level for the SHIELD study; setting this to the integer number *10* enables trace level output in the `Browser Console`; this is particularly useful to shed light on odd behaviors in the code.
+- `shield.test.variation`, forces the variation of the study; if not set, the variation will be automatically assigned when the study starts.
 
-1. `git clone` the directory.
-2. `npm install` then `npm run firefox` from the Github (source) directory.
-
-
-### Note: checking "Correct Pings"
-
-All interactions with the UI create sequences of Telemetry Pings.
-
-All UI `shield-study` `study_state` sequences look like this:
-
-- `enter => install => (one of: "voted" | "notification-x" |  "window-or-fx-closed") => exit`.
-
-(Note: this is complicated to explain, so please ask questions and I will try to write it up better!, see `TELMETRY.md` and EXAMPLE SEQUENCE below.)
-
-### Do these tests.
-
-1.  UI APPEARANCE.  OBSERVE a notification bar with these traits:
-
-    *  Icon is 'heartbeat'
-    *  Text is one of 8 selected "questions", such as:  "Do you like Firefox?".  These are listed in [./addon/Config.jsm] as the variable `weightedVariations`.
-    *  clickable buttons with labels 'yes | not sure | no'  OR 'no | not sure | yes' (50/50 chance of each)
-    *  an `x` button at the right that closes the notice.
-
-    Test fails IF:
-
-    - there is no bar.
-    - elements are not correct or are not displayed
-
-
-2.  UI functionality: VOTE
-
-    Expect:  Click on a 'vote' button (any of: `yes | not sure | no`) has all these effects
-
-    - notice closes
-    - addon uninstalls
-    - no additional tabs open
-    - telemetry pings are 'correct' with this SPECIFIC `study_state` as the ending
-
-        - ending is `voted`
-        - 'vote' is correct.
-
-3.  UI functionality: 'X' button
-
-    Click on the 'x' button.
-
-    - notice closes
-    - addon uninstalls
-    - no additional tabs open
-    - telemetry pings are 'correct' with this SPECIFIC ending
-
-      - ending is `notification-x`
-
-4.  UI functionality  'close window'
-
-    1.  Open a 2nd firefox window.
-    2.  Close the initial window.
-
-    Then observe:
-
-    - notice closes
-    - addon uninstalls
-    - no additional tabs open
-    - telemetry pings are 'correct' with this SPECIFIC ending
-
-      - ending is `window-or-fx-closed`
-
-
----
-## Helper code and tips
-
-### ***To open a Chrome privileged console***
-
-1.  `about:addons`
-2.  `Tools > web developer console`
-
-Or use other methods, like Scratchpad.
-
-
-### **Telemetry Ping Printing Helper Code**
-
-```javascript
-async function printPings() {
-  async function getTelemetryPings (options) {
-    // type is String or Array
-    const {type, n, timestamp, headersOnly} = options;
-    Components.utils.import("resource://gre/modules/TelemetryArchive.jsm");
-    // {type, id, timestampCreated}
-    let pings = await TelemetryArchive.promiseArchivedPingList();
-    if (type) {
-      if (!(type instanceof Array)) {
-        type = [type];  // Array-ify if it's a string
-      }
-    }
-    if (type) pings = pings.filter(p => type.includes(p.type));
-    if (timestamp) pings = pings.filter(p => p.timestampCreated > timestamp);
-
-    pings.sort((a, b) => b.timestampCreated - a.timestampCreated);
-    if (n) pings = pings.slice(0, n);
-    const pingData = headersOnly ? pings : pings.map(ping => TelemetryArchive.promiseArchivedPingById(ping.id));
-    return Promise.all(pingData)
-  }
-  async function getPings() {
-    const ar = ["shield-study", "shield-study-addon"];
-    return getTelemetryPings({type: ["shield-study", "shield-study-addon"]});
-  }
-
-  const pings = (await getPings()).reverse();
-  const p0 = pings[0].payload;
-  // print common fields
-  console.log(
-    `
-// common fields
-
-branch        ${p0.branch}        // should describe Question text
-study_name    ${p0.study_name}
-addon_version ${p0.addon_version}
-version       ${p0.version}
-
-    `
-  )
-
-  pings.forEach(p=>{
-    console.log(p.creationDate, p.payload.type);
-    console.log(JSON.stringify(p.payload.data,null,2))
-  })
-}
-
-printPings()
-
-```
-
-
-### Example sequence for a 'voted => not sure' interaction
-
-See [TELEMETRY.md](./TELEMETRY.md), EXAMPLE SEQUENCE section at the bottom.
