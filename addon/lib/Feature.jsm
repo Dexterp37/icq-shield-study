@@ -559,7 +559,10 @@ class Feature {
     this._isMeasuring = false;
 
     // Send any partial data that we have.
-    await this._generateAndSendPing(data.partial, "error");
+    const partialData = data.partial || {};
+    let payload = Cu.cloneInto(partialData, {});
+    payload.type = data.type;
+    await this._generateAndSendPing(payload, "error");
 
     // Terminate this study!
     this._studyUtils.endStudy({ reason: "ended-negative" });
