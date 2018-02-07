@@ -12,7 +12,55 @@ Cu.import("resource://gre/modules/AppConstants.jsm");
 /* eslint no-unused-vars: ["error", { "varsIgnorePattern": "(config|EXPORTED_SYMBOLS)" }]*/
 var EXPORTED_SYMBOLS = ["config"];
 
+// The preference branch we use for storing temporary data.
+const PREF_BRANCH = "extensions.icqstudyv1";
+
 var config = {
+  "PreferencesBranch": PREF_BRANCH,
+
+  // The following is a list of preferences used by the study,
+  // along with their default values. We allow overriding this prefs
+  // for testing purposes.
+  "StudyPrefs": {
+    // How long (in ms) until we can start measurements after the browser
+    // started up.
+    "InitDelay": {
+      "name": `${PREF_BRANCH}.initDelayMs`,
+      "defaultValue": 60 * 1000,
+    },
+    // The pref that stores the date the study was started.
+    "StartDate": {
+      "name": `${PREF_BRANCH}.startDateMs`,
+      "defaultValue": null,
+    },
+    // How long (in seconds) user must be idle before we can consider measuring
+    // the speed of the connection.
+    "IdleWindowSizeS": {
+      "name": `${PREF_BRANCH}.idleWindowS`,
+      "defaultValue": 60 * 5, // 5 minutes
+    },
+    // The URI to use for testing the connection quality.
+    "Endpoint": {
+      "name": `${PREF_BRANCH}.endpoint`,
+      "defaultValue": "https://somemozillauri-",
+    },
+    // The last time a measurement was completed (in ms).
+    "LastMeasurement": {
+      "name": `${PREF_BRANCH}.lastMeasurementMs`,
+      "defaultValue": null,
+    },
+    // The distance between two consecutive measurements (in ms).
+    "DelayBetweenMeasurements": {
+      "name": `${PREF_BRANCH}.delayBetweenMeasurementsMs`,
+      "defaultValue": 7 * 60 * 60 * 1000, // 7 hours
+    },
+    // The number of measurements performed throughout the lifetime of the study.
+    "PerformedMeasurements": {
+      "name": `${PREF_BRANCH}.numPerformedMeasurements`,
+      "defaultValue": 0,
+    },
+  },
+
   // required STUDY key
   "study": {
     /** Required for studyUtils.setup():

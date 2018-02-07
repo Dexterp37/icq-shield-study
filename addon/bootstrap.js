@@ -84,7 +84,7 @@ async function startup(addonData, reason) {
   await studyUtils.startup({ reason });
 
   // Initiate the chrome-privileged part of the study add-on.
-  this.feature = new Feature(variation, studyUtils, REASONS[reason], log );
+  this.feature = new Feature(variation, studyUtils, REASONS[reason], config.StudyPrefs, log);
   if (this.feature.HasExpired()) {
     // Please note that this should probably be taken care of by Normandy.
     await studyUtils.endStudy({ reason: "expired" });

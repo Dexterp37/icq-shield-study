@@ -19,57 +19,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "idleService",
 XPCOMUtils.defineLazyServiceGetter(this, "CaptivePortalService",
   "@mozilla.org/network/captive-portal-service;1", "nsICaptivePortalService");
 
-XPCOMUtils.defineLazyModuleGetter(
-  this, "HiddenFrame", "resource://icq-study-v1/lib/HiddenFrame.jsm"
-);
+XPCOMUtils.defineLazyModuleGetter(this, "HiddenFrame",
+  "resource://icq-study-v1/lib/HiddenFrame.jsm");
 
 const EXPORTED_SYMBOLS = ["Feature"];
-
-// The preference branch we use for storing temporary data.
-const PREF_BRANCH = "extensions.icqstudyv1";
-
-// The following is a list of preferences used by the study,
-// along with their default values. We allow overriding this prefs
-// for testing purposes.
-const STUDY_PREFS = {
-  // How long (in ms) until we can start measurements after the browser
-  // started up.
-  InitDelay: {
-    name: `${PREF_BRANCH}.initDelayMs`,
-    defaultValue: 60 * 1000,
-  },
-  // The pref that stores the date the study was started.
-  StartDate: {
-    name: `${PREF_BRANCH}.startDateMs`,
-    defaultValue: null,
-  },
-  // How long (in seconds) user must be idle before we can consider measuring
-  // the speed of the connection.
-  IdleWindowSizeS: {
-    name: `${PREF_BRANCH}.idleWindowS`,
-    defaultValue: 60 * 5, // 5 minutes
-  },
-  // The URI to use for testing the connection quality.
-  Endpoint: {
-    name: `${PREF_BRANCH}.endpoint`,
-    defaultValue: "https://somemozillauri-",
-  },
-  // The last time a measurement was completed (in ms).
-  LastMeasurement: {
-    name: `${PREF_BRANCH}.lastMeasurementMs`,
-    defaultValue: null,
-  },
-  // The distance between two consecutive measurements (in ms).
-  DelayBetweenMeasurements: {
-    name: `${PREF_BRANCH}.delayBetweenMeasurementsMs`,
-    defaultValue: 7 * 60 * 60 * 1000, // 7 hours
-  },
-  // The number of measurements performed throughout the lifetime of the study.
-  PerformedMeasurements: {
-    name: `${PREF_BRANCH}.numPerformedMeasurements`,
-    defaultValue: 0,
-  },
-};
 
 // The number of measurements to gather.
 const NUM_MEASUREMENTS = 4;
@@ -158,28 +111,30 @@ function inferConnectionLabel(downlinkKbps, latencyMs = null) {
 
 class Feature {
   /**
-   *  The core of our study that implements the measuerment logic.
+   * The core of our study that implements the measuerment logic.
    *
-   *  @param {variation} study info about particular client study variation
-   *  @param {studyUtils} the configured studyUtils singleton.
-   *  @param {reasonName} string of bootstrap.js startup/shutdown reason
-   *
+   * @param {variation} study info about particular client study variation
+   * @param {studyUtils} the configured studyUtils singleton.
+   * @param {reasonName} string of bootstrap.js startup/shutdown reason
+   * @param {prefs} The object containing the prefs definitions.
+   * @param {log} The study logger.
    */
-  constructor(variation, studyUtils, reasonName, log) {
+  constructor(variation, studyUtils, reasonName, prefs, log) {
     this._variation = variation;
     this._studyUtils = studyUtils;
     this._reasonName = reasonName;
     this._log = log;
+    this._studyPrefs = prefs;
 
-    this._startDateMs = getDateFromPref(STUDY_PREFS.StartDate);
+    this._startDateMs = getDateFromPref(this._studyPrefs.StartDate);
     if (!this._startDateMs) {
       // If there's no pref, fixup.
       this._startDateMs = Date.now();
-      Services.prefs.setCharPref(STUDY_PREFS.StartDate.name, `${this._startDateMs}`);
+      Services.prefs.setCharPref(this._studyPrefs.StartDate.name, `${this._startDateMs}`);
     }
 
-    this._delayBetweenMeasurements = Services.prefs.getIntPref(STUDY_PREFS.DelayBetweenMeasurements.name,
-      STUDY_PREFS.DelayBetweenMeasurements.defaultValue);
+    this._delayBetweenMeasurements = Services.prefs.getIntPref(this._studyPrefs.DelayBetweenMeasurements.name,
+      this._studyPrefs.DelayBetweenMeasurements.defaultValue);
   }
 
   /**
@@ -204,14 +159,14 @@ class Feature {
     // After this timer is triggered, we will consider running measurements
     // during idle time.
     const initDelay =
-      Services.prefs.getIntPref(STUDY_PREFS.InitDelay.name, STUDY_PREFS.InitDelay.defaultValue);
+      Services.prefs.getIntPref(this._studyPrefs.InitDelay.name, this._studyPrefs.InitDelay.defaultValue);
     this._startupTimer = setTimeout(() => {
       this._startupTimer = null;
 
       // Watch out for idle time windows. We need to store the time in order to remove the
       // observer at shutdown.
       this._idleTimeS = Services.prefs.getIntPref(
-        STUDY_PREFS.IdleWindowSizeS.name, STUDY_PREFS.IdleWindowSizeS.defaultValue);
+        this._studyPrefs.IdleWindowSizeS.name, this._studyPrefs.IdleWindowSizeS.defaultValue);
       idleService.addIdleObserver(this, this._idleTimeS);
     }, initDelay);
 
@@ -452,7 +407,7 @@ class Feature {
     }
 
     // Check if enough time passed since the last download.
-    const lastMeasurementDate = getDateFromPref(STUDY_PREFS.LastMeasurement);
+    const lastMeasurementDate = getDateFromPref(this._studyPrefs.LastMeasurement);
     if (lastMeasurementDate &&
         Math.abs(lastMeasurementDate - Date.now()) < this._delayBetweenMeasurements) {
       this._log.debug(`_performMeasurement - skipping idle (last measurement ${lastMeasurementDate})`);
@@ -467,7 +422,7 @@ class Feature {
 
     // Trigger the request.
     let endpointUrl =
-      Services.prefs.getCharPref(STUDY_PREFS.Endpoint.name, `${STUDY_PREFS.Endpoint.defaultValue}`);
+      Services.prefs.getCharPref(this._studyPrefs.Endpoint.name, `${this._studyPrefs.Endpoint.defaultValue}`);
     // Append a random number to the request to bypass the cache.
     endpointUrl = endpointUrl + "?" + (new Date()).getTime();
 
@@ -478,7 +433,7 @@ class Feature {
 
     // Set the last measurement date: we don't care if it was a failure or success,
     // as we don't want to measure more frequently than required.
-    Services.prefs.setCharPref(STUDY_PREFS.LastMeasurement.name, `${Date.now()}`);
+    Services.prefs.setCharPref(this._studyPrefs.LastMeasurement.name, `${Date.now()}`);
   }
 
   /**
@@ -538,7 +493,7 @@ class Feature {
     this._isMeasuring = false;
 
     // Send the measurement data.
-    const numMeasurements = incrementIntPref(STUDY_PREFS.PerformedMeasurements.name);
+    const numMeasurements = incrementIntPref(this._studyPrefs.PerformedMeasurements.name);
     const isFinalMeasurement = numMeasurements >= NUM_MEASUREMENTS;
     await this._generateAndSendPing(data, isFinalMeasurement ? "final" : "progress");
 
@@ -652,7 +607,7 @@ class Feature {
     // Remove the preferences from this study.
     // TODO: uncomment for production.
     // var defaultBranch = Services.prefs.getDefaultBranch(null);
-    // defaultBranch.deleteBranch(PREF_BRANCH);
+    // defaultBranch.deleteBranch(config.PreferencesBranch);
   }
 }
 
