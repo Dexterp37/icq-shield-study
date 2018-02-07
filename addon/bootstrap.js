@@ -46,7 +46,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Feature",
 */
 
 async function startup(addonData, reason) {
-  // `addonData`: Array [ "id", "version", "installPath", "resourceURI", "instanceID", "webExtension" ]  bootstrap.js:48
+  // `addonData`: Array [ "id", "version", "installPath", "resourceURI", "instanceID" ]  bootstrap.js:48
   log.debug("startup", REASONS[reason] || reason);
 
   /* Configuration of Study Utils*/
@@ -92,20 +92,6 @@ async function startup(addonData, reason) {
   }
 
   await this.feature.start();
-
-  // IFF your study has an embedded webExtension, start it.
-  const { webExtension } = addonData;
-  if (webExtension) {
-    webExtension.startup().then(api => {
-      const { browser } = api;
-      /** spec for messages intended for Shield =>
-       * {shield:true,msg=[info|endStudy|telemetry],data=data}
-       */
-      browser.runtime.onMessage.addListener(studyUtils.respondToWebExtensionMessage);
-      // other browser.runtime.onMessage handlers for your addon, if any
-      // this.feature.afterWebExtensionStartup(browser);
-    });
-  }
 
   // log what the study variation and other info is.
   log.debug(`info ${JSON.stringify(studyUtils.info())}`);
