@@ -113,18 +113,20 @@ class Feature {
   /**
    * The core of our study that implements the measuerment logic.
    *
-   * @param {variation} study info about particular client study variation
+   * @param {variation} study info about particular client study variation.
    * @param {studyUtils} the configured studyUtils singleton.
-   * @param {reasonName} string of bootstrap.js startup/shutdown reason
+   * @param {reasonName} string of bootstrap.js startup/shutdown reason.
    * @param {prefs} The object containing the prefs definitions.
+   * @param {prefBranch} The root preferences branch name.
    * @param {log} The study logger.
    */
-  constructor(variation, studyUtils, reasonName, prefs, log) {
+  constructor(variation, studyUtils, reasonName, prefs, prefBranch, log) {
     this._variation = variation;
     this._studyUtils = studyUtils;
     this._reasonName = reasonName;
     this._log = log;
     this._studyPrefs = prefs;
+    this._prefBranch = prefBranch;
 
     this._startDateMs = getDateFromPref(this._studyPrefs.StartDate);
     if (!this._startDateMs) {
@@ -605,9 +607,8 @@ class Feature {
     this._cleanupFrame();
 
     // Remove the preferences from this study.
-    // TODO: uncomment for production.
-    // var defaultBranch = Services.prefs.getDefaultBranch(null);
-    // defaultBranch.deleteBranch(config.PreferencesBranch);
+    var defaultBranch = Services.prefs.getDefaultBranch(null);
+    defaultBranch.deleteBranch(this._prefBranch);
   }
 }
 
