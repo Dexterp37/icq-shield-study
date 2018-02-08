@@ -8,6 +8,7 @@
 */
 const { utils: Cu } = Components;
 Cu.import("resource://gre/modules/AppConstants.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 /* eslint no-unused-vars: ["error", { "varsIgnorePattern": "(config|EXPORTED_SYMBOLS)" }]*/
 var EXPORTED_SYMBOLS = ["config"];
@@ -130,8 +131,9 @@ var config = {
   // a place to put an 'isEligible' function
   // Will run only during first install attempt
   "isEligible": async function() {
-    // We only support this study on Windows.
-    return AppConstants.platform === "win";
+    // We only support this study on Windows with e10s enabled.
+    return AppConstants.platform === "win" &&
+           Services.appinfo.browserTabsRemoteAutostart === true;
   },
 
   /**
