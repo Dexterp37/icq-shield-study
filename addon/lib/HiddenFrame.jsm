@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This is a copy of
+// https://hg.mozilla.org/mozilla-central/file/b38d59f71915/toolkit/modules/HiddenFrame.jsm
+
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["HiddenFrame"];

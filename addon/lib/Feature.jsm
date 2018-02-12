@@ -6,21 +6,18 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 // Lazy load modules that might not get called if the study
 // doesn't start.
-XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
-  "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
-  "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryController",
-  "resource://gre/modules/TelemetryController.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  clearTimeout: "resource://gre/modules/Timer.jsm",
+  HiddenFrame: "resource://icq-study-v1/lib/HiddenFrame.jsm",
+  setTimeout: "resource://gre/modules/Timer.jsm",
+  TelemetryController: "resource://gre/modules/TelemetryController.jsm",
+});
 
 // Lazy load the needed services as well.
-XPCOMUtils.defineLazyServiceGetter(this, "idleService",
-  "@mozilla.org/widget/idleservice;1", "nsIIdleService");
-XPCOMUtils.defineLazyServiceGetter(this, "CaptivePortalService",
-  "@mozilla.org/network/captive-portal-service;1", "nsICaptivePortalService");
-
-XPCOMUtils.defineLazyModuleGetter(this, "HiddenFrame",
-  "resource://icq-study-v1/lib/HiddenFrame.jsm");
+XPCOMUtils.defineLazyServiceGetters(this, {
+  CaptivePortalService: ["@mozilla.org/network/captive-portal-service;1", "nsICaptivePortalService"],
+  idleService: ["@mozilla.org/widget/idleservice;1", "nsIIdleService"],
+});
 
 const EXPORTED_SYMBOLS = ["Feature"];
 
@@ -111,7 +108,7 @@ function inferConnectionLabel(downlinkKbps, latencyMs = null) {
 
 class Feature {
   /**
-   * The core of our study that implements the measuerment logic.
+   * The core of our study that implements the measurement logic.
    *
    * @param {variation} study info about particular client study variation.
    * @param {studyUtils} the configured studyUtils singleton.
@@ -147,7 +144,7 @@ class Feature {
    * @return {Boolean} true if enough days passed since the study was installed, false
    *         otherwise.
    */
-  HasExpired() {
+  hasExpired() {
     return Math.abs(this._startDateMs - Date.now()) >= OBSERVATION_DAYS_MS;
   }
 
@@ -391,7 +388,7 @@ class Feature {
     this._log.debug("_performMeasurement");
 
     // Did we expire while the study was running?
-    if (this.HasExpired()) {
+    if (this.hasExpired()) {
       await this._studyUtils.endStudy({ reason: "expired" });
       return;
     }
@@ -598,9 +595,8 @@ class Feature {
     // Clean up the timer and the idle observer.
     clearTimeout(this._startupTimer);
 
-    if (typeof this._idleTimeS === "number") {
+    if (this._idleTimeS) {
       idleService.removeIdleObserver(this, this._idleTimeS);
-      this._idleTimeS = null;
     }
 
     // As a last thing, cleanup the internal frame.

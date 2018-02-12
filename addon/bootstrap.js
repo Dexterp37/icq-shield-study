@@ -86,7 +86,7 @@ async function startup(addonData, reason) {
   // Initiate the chrome-privileged part of the study add-on.
   this.feature = new Feature(variation, studyUtils, REASONS[reason], config.StudyPrefs,
                              config.PreferencesBranch, log);
-  if (this.feature.HasExpired()) {
+  if (this.feature.hasExpired()) {
     // Please note that this should probably be taken care of by Normandy.
     await studyUtils.endStudy({ reason: "expired" });
     return;
@@ -115,8 +115,9 @@ function shutdown(addonData, reason) {
       // we are the first 'uninstall' requestor => must be user action.
       log.debug("probably: user requested shutdown");
       studyUtils.endStudy({ reason: "user-disable" });
-      // TODO: Why is the following return needed!?
-      // return;
+      // We want to handle both "uninstall" and "user disabled" the same way,
+      // by ending the study and uninstalling the addon. That's why we're not
+      // returning here.
     }
     // normal shutdown, or 2nd uninstall request
 
