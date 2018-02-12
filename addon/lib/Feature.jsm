@@ -570,9 +570,11 @@ class Feature {
    */
   _cleanupFrame() {
     // Uninstall the listener.
-    this._frame.messageManager.removeMessageListener("icqStudyMsg", this._chromeHandler);
-    this._frame = null;
-    this._chromeHandler = null;
+    if (this._frame) {
+      this._frame.messageManager.removeMessageListener("icqStudyMsg", this._chromeHandler);
+      this._frame = null;
+      this._chromeHandler = null;
+    }
 
     // Dispose of the hidden browser.
     if (this._browser !== null) {
@@ -592,6 +594,10 @@ class Feature {
   shutdown() {
     this._log.debug("shutdown");
 
+    // Remove the preferences from this study.
+    var defaultBranch = Services.prefs.getDefaultBranch(null);
+    defaultBranch.deleteBranch(this._prefBranch);
+
     // Clean up the timer and the idle observer.
     clearTimeout(this._startupTimer);
 
@@ -601,10 +607,6 @@ class Feature {
 
     // As a last thing, cleanup the internal frame.
     this._cleanupFrame();
-
-    // Remove the preferences from this study.
-    var defaultBranch = Services.prefs.getDefaultBranch(null);
-    defaultBranch.deleteBranch(this._prefBranch);
   }
 }
 
