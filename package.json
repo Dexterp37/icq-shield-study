@@ -7,14 +7,14 @@
     "$ABOUT": "use these variables fill the moustache templates",
     "id": "icq-study-v1@shield-study.mozilla.com",
     "name": "Internet Connection Quality Study",
-    "minVersion": "57.*",
+    "minVersion": "58.*",
     "maxVersion": "*",
     "multiprocessCompatible": true,
     "hasEmbeddedWebExtension": false,
     "chromeResource": "icq-study-v1",
     "creator": "Alessio Placitelli <aplacitelli@mozilla.com>",
     "description": "Measure the quality of the internet connection",
-    "bugzilla": "<tbd: bug to attach for signing>",
+    "bugzilla": "https://bugzilla.mozilla.org/show_bug.cgi?id=1432835",
     "iconPath": "icon.png"
   },
   "bugs": {
