@@ -43,7 +43,7 @@ var config = {
     // The URI to use for testing the connection quality.
     "Endpoint": {
       "name": `${PREF_BRANCH}.endpoint`,
-      "defaultValue": "https://somemozillauri-",
+      "defaultValue": "https://icqv1.cdn.mozilla.net/1cd880ae9d0048588cb7a94e840699ec",
     },
     // The last time a measurement was completed (in ms).
     "LastMeasurement": {
