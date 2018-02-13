@@ -6,11 +6,62 @@
 - Cu.import in this file will work for any 'general firefox things' (Services,etc)
   but NOT for addon-specific libs
 */
+const { utils: Cu } = Components;
+Cu.import("resource://gre/modules/AppConstants.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 /* eslint no-unused-vars: ["error", { "varsIgnorePattern": "(config|EXPORTED_SYMBOLS)" }]*/
 var EXPORTED_SYMBOLS = ["config"];
 
+// The preference branch we use for storing temporary data.
+const PREF_BRANCH = "extensions.icqstudyv1";
+
 var config = {
+  "PreferencesBranch": PREF_BRANCH,
+
+  // The following is a list of preferences used by the study,
+  // along with their default values. We allow overriding this prefs
+  // for testing purposes.
+  "StudyPrefs": {
+    // How long (in ms) until we can start measurements after the browser
+    // started up.
+    "InitDelay": {
+      "name": `${PREF_BRANCH}.initDelayMs`,
+      "defaultValue": 60 * 1000,
+    },
+    // The pref that stores the date the study was started.
+    "StartDate": {
+      "name": `${PREF_BRANCH}.startDateMs`,
+      "defaultValue": null,
+    },
+    // How long (in seconds) user must be idle before we can consider measuring
+    // the speed of the connection.
+    "IdleWindowSizeS": {
+      "name": `${PREF_BRANCH}.idleWindowS`,
+      "defaultValue": 60 * 5, // 5 minutes
+    },
+    // The URI to use for testing the connection quality.
+    "Endpoint": {
+      "name": `${PREF_BRANCH}.endpoint`,
+      "defaultValue": "https://icqv1.cdn.mozilla.net/1cd880ae9d0048588cb7a94e840699ec",
+    },
+    // The last time a measurement was completed (in ms).
+    "LastMeasurement": {
+      "name": `${PREF_BRANCH}.lastMeasurementMs`,
+      "defaultValue": null,
+    },
+    // The distance between two consecutive measurements (in ms).
+    "DelayBetweenMeasurements": {
+      "name": `${PREF_BRANCH}.delayBetweenMeasurementsMs`,
+      "defaultValue": 7 * 60 * 60 * 1000, // 7 hours
+    },
+    // The number of measurements performed throughout the lifetime of the study.
+    "PerformedMeasurements": {
+      "name": `${PREF_BRANCH}.numPerformedMeasurements`,
+      "defaultValue": 0,
+    },
+  },
+
   // required STUDY key
   "study": {
     /** Required for studyUtils.setup():
@@ -28,7 +79,11 @@ var config = {
     // required keys: studyName, endings, telemetry
 
     // will be used activeExperiments tagging
-    "studyName": "buttonFeatureExperiment",
+    "studyName": "icqStudyV1",
+
+    // The chrome resource path. This should be somehow related to the study name,
+    // but it's not required to.
+    "chromeResourceBasePath": "icq-study-v1",
 
     /** **endings**
       * - keys indicate the 'endStudy' even that opens these.
@@ -39,14 +94,8 @@ var config = {
       */
     "endings": {
       /** standard endings */
-      "user-disable": {
-        "baseUrl": "http://www.example.com/?reason=user-disable",
-      },
-      "ineligible": {
-        "baseUrl": "http://www.example.com/?reason=ineligible",
-      },
-      "expired": {
-        "baseUrl": "http://www.example.com/?reason=expired",
+      "no-endings": {
+        "url": "null",
       },
       /** User defined endings */
       "used-often": {
@@ -55,7 +104,7 @@ var config = {
       },
       "a-non-url-opening-ending": {
         "study_state": "ended-neutral",
-        "baseUrl":  null,
+        "baseUrl": null,
       },
       "introduction-leave-study": {
         "study_state": "ended-negative",
@@ -64,7 +113,7 @@ var config = {
     },
     "telemetry": {
       "send": true, // assumed false. Actually send pings?
-      "removeTestingFlag": false,  // Marks pings as testing, set true for actual release
+      "removeTestingFlag": true,  // Marks pings as testing, set true for actual release
       // TODO "onInvalid": "throw"  // invalid packet for schema?  throw||log
     },
   },
@@ -72,7 +121,7 @@ var config = {
   // required LOG key
   "log": {
     // Fatal: 70, Error: 60, Warn: 50, Info: 40, Config: 30, Debug: 20, Trace: 10, All: -1,
-    "studyUtils":  {
+    "studyUtils": {
       "level": "Trace",
     },
   },
@@ -82,23 +131,24 @@ var config = {
   // a place to put an 'isEligible' function
   // Will run only during first install attempt
   "isEligible": async function() {
-    // get whatever prefs, addons, telemetry, anything!
-    // Cu.import can see 'firefox things', but not package things.
-    return true;
+    // We only support this study on Windows with e10s enabled.
+    return AppConstants.platform === "win" &&
+           Services.appinfo.browserTabsRemoteAutostart === true;
   },
 
-  /* Button study branches and sample weights
-     - test kittens vs. puppies if we can only have one.
-       - downweight lizards.  Lizards is a 'poison' branch, meant to
-         help control for novelty effect
-  */
+  /**
+   * We want 20% of users to be in the control group: nothing
+   * should happen there.
+   */
   "weightedVariations": [
-    {"name": "kittens",
-      "weight": 1.5},
-    {"name": "puppers",
-      "weight": 1.5},
-    {"name": "lizard",
-      "weight": 1},  // we want more puppers in our sample
+    {
+      "name": "control",
+      "weight": 0.2,
+    },
+    {
+      "name": "test",
+      "weight": 0.8,
+    },
   ],
 
 
