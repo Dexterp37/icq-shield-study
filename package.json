@@ -5,7 +5,7 @@
   "author": "Alessio Placitelli <aplacitelli@mozilla.com>",
   "addon": {
     "$ABOUT": "use these variables fill the moustache templates",
-    "id": "icq-study-v1@shield-study.mozilla.com",
+    "id": "icq-study-v1@shield.mozilla.org",
     "name": "Internet Connection Quality Study",
     "minVersion": "58*",
     "maxVersion": "*",
