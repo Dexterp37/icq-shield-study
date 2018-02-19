@@ -7,7 +7,7 @@
     "$ABOUT": "use these variables fill the moustache templates",
     "id": "icq-study-v1@shield-study.mozilla.com",
     "name": "Internet Connection Quality Study",
-    "minVersion": "58.*",
+    "minVersion": "58*",
     "maxVersion": "*",
     "multiprocessCompatible": true,
     "hasEmbeddedWebExtension": false,
