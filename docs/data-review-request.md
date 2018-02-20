@@ -33,7 +33,7 @@ This is the first time something like this has been tried at Mozilla. We have pr
 
 No, as we don't have any built-in qualitative nor quantitative measurement about connection quality. Due to that, we have no way to establish how that quality affects the usage of Firefox features.
 
-5) List all proposed measurements and indicate the category of data collection for each measurement, using the Firefox [data c](https://wiki.mozilla.org/Firefox/Data_Collection)[ollection ](https://wiki.mozilla.org/Firefox/Data_Collection)[categories](https://wiki.mozilla.org/Firefox/Data_Collection) on the found on the Mozilla wiki.
+5) List all proposed measurements and indicate the category of data collection for each measurement, using the Firefox [data collection categories](https://wiki.mozilla.org/Firefox/Data_Collection) found on the Mozilla wiki.
 
 **Note that the data steward reviewing your request will characterize your data collection based on the highest (and most sensitive) category.**
 
