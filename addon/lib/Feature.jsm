@@ -372,6 +372,7 @@ class Feature {
     // false positives in the past in a vm environment.
     try {
       if (Services.io.offline ||
+          !Services.io.connectivity ||
           CaptivePortalService.state == CaptivePortalService.LOCKED_PORTAL) {
         return true;
       }
